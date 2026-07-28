@@ -1,0 +1,19 @@
+{
+  "id": "feishu_bitable_sample_params_import_1",
+  "pluginKey": "@official-plugins/feishu-bitable",
+  "pluginVersion": "1.0.22",
+  "name": "飞书多维表格样本参数读取",
+  "description": "从Wiki嵌入的飞书多维表格读取激光打样样本参数数据，通过searchRecords能力批量获取记录用于导入应用数据库",
+  "icon": "",
+  "paramsSchema": {},
+  "formValue": {
+    "fields": [],
+    "owner": "",
+    "tips": "使用searchRecords action读取表格记录，viewID可在调用时传入vew6rpxNng进行视图筛选",
+    "appToken": "Ht9AwHuP3ijsLtk5bL1cz92ZnUd",
+    "tableID": "tblNcWA7w17l2JxJ"
+  },
+  "createdAt": 1781515401669,
+  "updatedAt": 1781515401669,
+  "createdBy": 7615806828420533187
+}

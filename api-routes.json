@@ -1,0 +1,218 @@
+[
+  {
+    "method": "GET",
+    "path": "/"
+  },
+  {
+    "method": "GET",
+    "path": "/page"
+  },
+  {
+    "method": "GET",
+    "path": "/asset/:filename"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/machines"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/materials"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/materials/by-machine"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/samples"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/drawings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/drawing-file/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/storage-file"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/settings/popup-image"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/settings/removebg-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/login"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/download/project"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/drawings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/drawings/styles"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/drawings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/drawings/batch"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/public/admin/drawings/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/admin/drawings/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/samples"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/samples/check-duplicate"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/samples/export"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/samples/batch-import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/samples"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/public/admin/samples/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/admin/samples/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/materials"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/materials"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/public/admin/materials/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/admin/materials/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/machines"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/machines"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/public/admin/machines/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/admin/machines/:id"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/ai/analyze-material"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/ai/hunyuan-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/ai/hunyuan-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/ai/recognize"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/ai/recognize-batch"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/drawings/styles"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/public/admin/drawings/styles/:id"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/admin/drawings/styles/:id"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/settings/popup-image"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/settings/popup-image"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/settings/removebg-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/settings/removebg-key"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/login"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/verify"
+  },
+  {
+    "method": "GET",
+    "path": "/api/public/admin/accounts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/accounts"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/public/admin/accounts/:id"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/accounts/change-password"
+  },
+  {
+    "method": "POST",
+    "path": "/api/public/admin/accounts/reset-password"
+  }
+]

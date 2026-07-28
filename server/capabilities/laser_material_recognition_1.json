@@ -1,0 +1,36 @@
+{
+  "id": "laser_material_recognition_1",
+  "pluginKey": "@official-plugins/ai-image-understanding",
+  "pluginVersion": "1.0.18",
+  "name": "激光加工材质识别",
+  "description": "上传激光加工物料图片，自动识别为木材、金属、亚克力、玻璃、皮革、布料、纸张、陶瓷等材质类别之一，用于V5激光参数推荐页和Admin样本参数Tab的自动识别功能。",
+  "icon": "",
+  "paramsSchema": {
+    "type": "object",
+    "properties": {
+      "material_image": {
+        "type": "array",
+        "format": "plugin-image-url",
+        "description": "待识别的激光加工材质图片",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "material_image"
+    ]
+  },
+  "formValue": {
+    "images": "{{input.material_image}}",
+    "modelID": "88",
+    "modelParams": {
+      "maxTokens": 8192,
+      "temperature": 0.5
+    },
+    "prompt": "你是一位专业的激光加工材质识别专家，具备丰富的工业材料识别经验。\n\n请对提供的图片进行材质识别，判断其属于以下哪一类别：木材、金属、亚克力、玻璃、皮革、布料、纸张、陶瓷。\n\n识别要求：\n1. 仅输出类别名称，不要输出任何其他解释性内容\n2. 如果无法明确判断属于上述类别之一，请输出\"未知\"\n3. 识别结果必须严格在给定的类别列表中选择，不得生成列表外的类别\n\n请直接输出识别结果："
+  },
+  "createdAt": 1780366815823,
+  "updatedAt": 1780366815823,
+  "createdBy": 7615806828420533187
+}

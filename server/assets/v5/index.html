@@ -1,0 +1,4806 @@
+<!DOCTYPE html>
+<!-- saved from url=(0050)http://127.0.0.1:3003/index.v2026-04-29-final.html -->
+<html lang="zh-CN"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XTOOL激光预览工具</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.min.js"></script>
+  <script>
+    if (typeof ort === 'undefined') {
+      document.write('<scr' + 'ipt src="https://unpkg.com/onnxruntime-web@1.21.0/dist/ort.min.js"><\/scr' + 'ipt>');
+    }
+  </script>
+  <script>
+    window.__pendingRequests = {};
+    window.__imgCache = {};
+    window.__fetchApi = function(path) {
+      return new Promise(function(resolve, reject) {
+        var requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        window.__pendingRequests[requestId] = { resolve: resolve, reject: reject };
+        window.parent.postMessage({ type: 'API_REQUEST', requestId: requestId, path: path }, '*');
+      });
+    };
+    window.__fetchImg = function(path) {
+      if (window.__imgCache[path]) return Promise.resolve(window.__imgCache[path]);
+      return new Promise(function(resolve, reject) {
+        var requestId = 'img_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        window.__pendingRequests[requestId] = {
+          resolve: function(blobUrl) { window.__imgCache[path] = blobUrl; resolve(blobUrl); },
+          reject: reject
+        };
+        window.parent.postMessage({ type: 'IMG_REQUEST', requestId: requestId, url: path }, '*');
+      });
+    };
+    function __getAppPrefix() {
+      if (window.__APP_PREFIX__) return window.__APP_PREFIX__;
+      var prefix = '/';
+      try {
+        var ref = document.referrer;
+        if (ref) {
+          var u = new URL(ref);
+          var m = u.pathname.match(/^(\/app\/[^/]+\/)/);
+          if (m) prefix = m[1];
+        }
+      } catch(e) {}
+      window.__APP_PREFIX__ = prefix;
+      return prefix;
+    }
+    function __toProxyUrl(storagePath) {
+      if (!storagePath || !storagePath.startsWith('/spark/')) return storagePath;
+      return '/api/public/storage-file?path=' + encodeURIComponent(storagePath);
+    }
+    function __toDrawingUrl(id) {
+      return '/api/public/drawing-file/' + id;
+    }
+    function __patchStorageUrls(data) {
+      if (!data || !data.items || !Array.isArray(data.items)) return data;
+      data.items.forEach(function(item) {
+        if (!item || typeof item !== 'object') return;
+        if (item.id && item.filepath && item.filepath.startsWith('/spark/')) {
+          item._drawingUrl = __toDrawingUrl(item.id);
+        }
+        Object.keys(item).forEach(function(key) {
+          if (typeof item[key] === 'string' && item[key].startsWith('/spark/')) {
+            item[key] = __toProxyUrl(item[key]);
+          }
+        });
+      });
+      return data;
+    }
+    window.addEventListener('message', function(event) {
+        if (event.data.type === 'API_RESPONSE') {
+          var pending = window.__pendingRequests[event.data.requestId];
+          if (!pending) return;
+          delete window.__pendingRequests[event.data.requestId];
+          if (event.data.error) {
+            pending.reject(new Error(event.data.error));
+          } else {
+            var patchedData = __patchStorageUrls(event.data.data);
+            pending.resolve({ json: function() { return Promise.resolve(patchedData); } });
+          }
+        }
+        if (event.data.type === 'IMG_RESPONSE') {
+          var pendingImg = window.__pendingRequests[event.data.requestId];
+          if (!pendingImg) return;
+          delete window.__pendingRequests[event.data.requestId];
+          if (event.data.error) {
+            pendingImg.reject(new Error(event.data.error));
+          } else {
+            pendingImg.resolve(event.data.dataUrl);
+          }
+        }
+        if (event.data.type === 'ANALYZE_MATERIAL_RESPONSE') {
+          var pendingMat = window.__pendingRequests[event.data.requestId];
+          if (!pendingMat) return;
+          delete window.__pendingRequests[event.data.requestId];
+          if (event.data.error) {
+            pendingMat.reject(new Error(event.data.error));
+          } else {
+            pendingMat.resolve({ success: event.data.success, material: event.data.material, color: event.data.color, rawText: event.data.rawText });
+          }
+        }
+    });
+  </script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #000000;
+      color: #e2e2e2;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ===== HEADER ===== */
+    header {
+      height: 72px;
+      background: #0a0a0a;
+      border-bottom: 1px solid #1e1e1e;
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #28be44;
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      width: 100%;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    header h1 .title-main {
+      display: flex;
+      align-items: center;
+      color: #28be44;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    header h1 .header-logo {
+      height: 52px;
+      width: auto;
+      object-fit: contain;
+      margin-left: 12px;
+      vertical-align: middle;
+    }
+
+    header h1 .title-sub {
+      color: #FFFFFF;
+      white-space: nowrap;
+    }
+
+    header h1 .tagline-area {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      white-space: nowrap;
+    }
+
+    header h1 .tagline-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-shrink: 0;
+    }
+
+    header h1 .tagline-icon {
+      font-size: 26px;
+      line-height: 1;
+    }
+
+    header h1 .tagline-lines {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    header h1 .tagline-main-text {
+      font-size: 14px;
+      font-weight: 700;
+      color: #e2e2e2;
+      white-space: nowrap;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    header h1 .tagline-sub-text {
+      font-size: 11px;
+      color: #6e7a80;
+      white-space: nowrap;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    header h1 .accuracy {
+      position: absolute;
+      right: 24px;
+      font-size: 18px;
+      font-weight: 700;
+      white-space: nowrap;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+      flex-shrink: 0;
+    }
+
+    header h1 .accuracy-label {
+      color: #28be44;
+    }
+
+    header h1 .accuracy-value {
+      color: #FFFFFF;
+    }
+
+    /* ===== MAIN ===== */
+    main {
+      flex: 1;
+      display: flex;
+      gap: 0;
+      overflow: hidden;
+    }
+
+    /* ===== COLUMN 1: Workflow Steps ===== */
+    .col1 {
+      display: none;
+      width: 220px;
+      flex-shrink: 0;
+      background: #0d0d0d;
+      border-right: 1px solid #1e1e1e;
+      flex-direction: column;
+      padding: 20px 16px;
+      gap: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .step-card {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 14px 14px 12px;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .step-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+
+    .step-body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .step-num {
+      font-size: 12px;
+      color: #6e7a80;
+      margin-bottom: 3px;
+      letter-spacing: 0.5px;
+    }
+
+    .step-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #e2e2e2;
+      margin-bottom: 5px;
+    }
+
+    .step-desc {
+      font-size: 12px;
+      color: #6e7a80;
+      line-height: 1.4;
+    }
+
+    .col1-logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 16px 4px;
+      margin-top: auto;
+    }
+
+    .col1-bg {
+      position: absolute;
+      inset: 0;
+      background-image: url('__MACHINE_BG_URL__');
+      background-size: cover;
+      background-position: center center;
+      background-repeat: no-repeat;
+      mask-image: radial-gradient(ellipse 60% 50% at 50% 50%, rgba(0,0,0,1) 0%, rgba(0,0,0,0.6) 40%, rgba(0,0,0,0) 75%);
+      -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 50%, rgba(0,0,0,1) 0%, rgba(0,0,0,0.6) 40%, rgba(0,0,0,0) 75%);
+      opacity: 0.35;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ===== COLUMN 2: Center ===== */
+    .col2 {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .c2-row {
+      display: flex;
+    }
+
+    .c2-row-1 {
+      flex: 1.4;
+      border-bottom: 1px solid #1e1e1e;
+      min-height: 0;
+    }
+
+    .c2-row-2 {
+      height: 48px;
+      flex-shrink: 0;
+      border-bottom: 1px solid #1e1e1e;
+    }
+
+    .c2-row-3 {
+      height: 52px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 0 20px;
+    }
+
+    .three-panel {
+      flex: 1;
+      display: flex;
+    }
+
+    .panel {
+      flex: 1;
+      background: #0d0d0d;
+      border-right: 1px solid #1e1e1e;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    .panel:last-child {
+      border-right: none;
+    }
+
+    .panel-label {
+      position: relative;
+      font-size: 13px;
+      color: #6e7a80;
+      text-align: center;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .panel-label .trash-btn {
+      display: none;
+      background: none;
+      border: none;
+      color: #6e7a80;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 0;
+      line-height: 1;
+      transition: color 0.15s;
+    }
+
+    .panel-label .trash-btn:hover {
+      color: #ff7245;
+    }
+
+    .panel-label .trash-btn.visible {
+      display: inline;
+    }
+
+    .panel-label .clickable-title {
+      background: none;
+      border: none;
+      color: #6e7a80;
+      font-size: 13px;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+      cursor: pointer;
+      padding: 0;
+      line-height: 1;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+
+    .panel-label .clickable-title:hover {
+      color: #28be44;
+    }
+
+    .panel-label .clickable-title.disabled {
+      color: #3a3a3a;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .drawing-type-dropdown {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 6px 0;
+      min-width: 200px;
+      z-index: 100;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .drawing-type-dropdown.open {
+      display: block;
+    }
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: background 0.1s;
+      font-size: 13px;
+      color: #c8c8c8;
+    }
+    .dropdown-item:hover {
+      background: #252525;
+      color: #fff;
+    }
+    .dropdown-item.active {
+      color: #28be44;
+    }
+    .dropdown-item.active::after {
+      content: '✓';
+      margin-left: auto;
+      font-size: 14px;
+      color: #28be44;
+    }
+    .dropdown-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      background: #252525;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .dropdown-item:hover .dropdown-icon {
+      background: #28be44;
+      color: #000;
+    }
+
+    .panel-label .upload-drawing-btn {
+      background: none;
+      border: 1px solid #2a2a2a;
+      color: #6e7a80;
+      font-size: 11px;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+      cursor: pointer;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-left: 6px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .panel-label .upload-drawing-btn:hover:not(:disabled) {
+      border-color: #28be44;
+      color: #28be44;
+    }
+
+    .panel-label .upload-drawing-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .ai-drawing-source-tag {
+      font-size: 10px;
+      color: #28be44;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+
+    .panel-box {
+      flex: 1;
+      background: #141414;
+      border: 1px dashed #2a2a2a;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .panel-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 6px;
+    }
+
+    .panel-placeholder {
+      font-size: 11px;
+      color: #3a3a3a;
+    }
+
+    /* Upload panel */
+    .upload-box {
+      width: 100%;
+      flex: 1;
+      background: #141414;
+      border: 1px dashed #2a2a2a;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      overflow: hidden;
+      min-height: 0;
+      position: relative;
+      transition: border-color 0.15s;
+    }
+
+    .upload-box:hover {
+      border-color: #28be44;
+    }
+
+    .upload-box.drag-over {
+      border-color: #28be44;
+      background: #1a1a1a;
+    }
+
+    .upload-box img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+    .upload-hint {
+      font-size: 11px;
+      color: #3a3a3a;
+      text-align: center;
+    }
+
+    .upload-hint span {
+      color: #28be44;
+    }
+
+    .panel-label .flat-detect-btn {
+      display: none;
+      background: none;
+      border: 1px solid #2a2a2a;
+      color: #6e7a80;
+      cursor: pointer;
+      font-size: 11px;
+      padding: 2px 8px;
+      line-height: 1.4;
+      border-radius: 4px;
+      transition: all 0.15s;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .panel-label .flat-detect-btn.visible {
+      display: inline;
+    }
+
+    .panel-label .flat-detect-btn:hover {
+      border-color: #28be44;
+      color: #28be44;
+    }
+
+    .panel-label .flat-detect-btn.active {
+      background: #28be44;
+      color: #fff;
+      border-color: #28be44;
+    }
+
+    .flat-tip {
+      display: none;
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #e8f8eb;
+      color: #1a7a2e;
+      font-size: 11px;
+      line-height: 1.5;
+      padding: 6px 26px 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #b6e2be;
+      white-space: nowrap;
+      z-index: 10;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      pointer-events: auto;
+    }
+
+    .flat-tip::before {
+      content: '';
+      position: absolute;
+      top: -5px;
+      left: 50%;
+      transform: translateX(-50%) rotate(45deg);
+      width: 8px;
+      height: 8px;
+      background: #e8f8eb;
+      border-left: 1px solid #b6e2be;
+      border-top: 1px solid #b6e2be;
+    }
+
+    .flat-tip-close {
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      background: none;
+      border: none;
+      color: #6eaa78;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 4px;
+    }
+
+    .flat-tip-close:hover {
+      color: #1a7a2e;
+    }
+
+    .flat-tip.show {
+      display: block;
+    }
+
+    #uploadInput {
+      display: none;
+    }
+
+    .param-row {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      border-right: 1px solid #1e1e1e;
+      gap: 8px;
+    }
+
+    .param-row:last-child {
+      border-right: none;
+    }
+
+    .param-label {
+      font-size: 13px;
+      color: #6e7a80;
+      white-space: nowrap;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .param-value {
+      font-size: 14px;
+      color: #e2e2e2;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      padding: 3px 8px;
+      flex: 1;
+      text-align: center;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .btn {
+      height: 36px;
+      border: none;
+      border-radius: 6px;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 0 24px;
+      transition: opacity 0.15s;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .btn:hover {
+      opacity: 0.85;
+    }
+
+    .btn-green {
+      background: #28be44;
+      color: #000;
+    }
+
+    .btn-orange {
+      background: #ff7245;
+      color: #000;
+    }
+
+    /* ===== COLUMN 3: Right Params ===== */
+    .col3 {
+      width: 260px;
+      flex-shrink: 0;
+      background: #0d0d0d;
+      border-right: 1px solid #1e1e1e;
+      order: -1;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .col3-bg {
+      position: absolute;
+      inset: 0;
+      background-image: none;
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, rgba(0,0,0,1) 20%, rgba(0,0,0,0) 80%);
+      -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, rgba(0,0,0,1) 20%, rgba(0,0,0,0) 80%);
+      opacity: 0.35;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .col3-bg.faded {
+      opacity: 0.08;
+    }
+
+    .c3-section {
+      border-bottom: 1px solid #1e1e1e;
+      padding: 10px 16px;
+      flex-shrink: 0;
+    }
+
+    .c3-section:last-child {
+      border-bottom: none;
+    }
+
+    .c3-section.hidden {
+      display: none;
+    }
+
+    .c3-section-title {
+      font-size: 13px;
+      color: #6e7a80;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .c3-section-title.green {
+      color: #28be44;
+    }
+
+    /* Combobox (searchable select) */
+    .combobox {
+      position: relative;
+      width: 100%;
+    }
+    .combobox-input-wrap {
+      display: flex;
+      align-items: center;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .combobox-input-wrap:focus-within {
+      border-color: #28be44;
+    }
+    .combobox-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: #e2e2e2;
+      font-size: 14px;
+      padding: 8px 12px;
+      outline: none;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+    .combobox-input::placeholder {
+      color: #6e7a80;
+    }
+    .combobox-toggle {
+      background: transparent;
+      border: none;
+      color: #6e7a80;
+      font-size: 10px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: color 0.15s;
+    }
+    .combobox-toggle:hover {
+      color: #e2e2e2;
+    }
+    .combobox-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-top: none;
+      border-radius: 0 0 6px 6px;
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 100;
+      display: none;
+    }
+    .combobox-dropdown.open {
+      display: block;
+    }
+    .combobox-option {
+      padding: 8px 12px;
+      color: #e2e2e2;
+      font-size: 14px;
+      cursor: pointer;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+      transition: background 0.1s;
+    }
+    .combobox-option:hover {
+      background: #252525;
+    }
+    .combobox-option.selected {
+      background: #1a2e1a;
+      color: #28be44;
+    }
+    .combobox-option.hidden {
+      display: none;
+    }
+    .combobox-dropdown::-webkit-scrollbar {
+      width: 6px;
+    }
+    .combobox-dropdown::-webkit-scrollbar-track {
+      background: #1a1a1a;
+    }
+    .combobox-dropdown::-webkit-scrollbar-thumb {
+      background: #333;
+      border-radius: 3px;
+    }
+
+    /* Machine select */
+    select {
+      width: 100%;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      color: #e2e2e2;
+      font-size: 14px;
+      padding: 8px 12px;
+      appearance: none;
+      cursor: pointer;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    select:focus {
+      outline: none;
+      border-color: #28be44;
+    }
+
+    /* Effect type select */
+    .effect-type-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .effect-type-btn {
+      height: 30px;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      background: #141414;
+      color: #FFFFFF;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .effect-type-btn.active {
+      border-color: #28be44;
+      background: #1a2e1a;
+      color: #28be44;
+    }
+
+    /* Param list */
+    .param-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .param-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .param-item .param-name {
+      font-size: 14px;
+      color: #e2e2e2;
+      white-space: nowrap;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+    }
+
+    .param-item .param-val {
+      font-size: 14px;
+      color: #cdeecd;
+      font-family: 'Segoe UI Rounded', 'Segoe UI', sans-serif;
+      white-space: nowrap;
+    }
+
+    /* AI recommended图纸 type */
+    .ai-drawing-types {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .ai-drawing-type {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .ai-drawing-type:hover {
+      border-color: #3a3a3a;
+    }
+
+    .ai-drawing-type.selected {
+      border-color: #28be44;
+      background: #1a2e1a;
+    }
+
+    .ai-drawing-type .type-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      background: #1e1e1e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    .ai-drawing-type.selected .type-icon {
+      background: #28be44;
+      color: #000;
+    }
+
+    .ai-drawing-type .type-info {
+      flex: 1;
+    }
+
+    .ai-drawing-type .type-name {
+      font-size: 12px;
+      color: #e2e2e2;
+    }
+
+    .ai-drawing-type .type-desc {
+      font-size: 10px;
+      color: #6e7a80;
+      margin-top: 1px;
+    }
+
+    .ai-drawing-type .check {
+      font-size: 14px;
+      color: #28be44;
+      display: none;
+    }
+
+    .ai-drawing-type.selected .check {
+      display: block;
+    }
+
+
+    /* Ad Popup Overlay */
+    .ad-popup-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.75);
+      z-index: 2000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .ad-popup-overlay.active {
+      display: flex;
+    }
+    .ad-popup-box {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+      position: relative;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    }
+    .ad-popup-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #28be44;
+      margin-bottom: 16px;
+    }
+    .ad-popup-content {
+      color: #e2e2e2;
+      font-size: 15px;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+    .ad-popup-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: #9ca3af;
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+    .ad-popup-spinner {
+      width: 20px;
+      height: 20px;
+      border: 3px solid #333;
+      border-top-color: #28be44;
+      border-radius: 50%;
+      animation: ad-spin 0.8s linear infinite;
+    }
+    @keyframes ad-spin {
+      to { transform: rotate(360deg); }
+    }
+    .ad-popup-progress {
+      width: 100%;
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .ad-popup-progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #28be44, #4ade80);
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .ad-popup-close-btn {
+      background: #28be44;
+      color: #fff;
+      border: none;
+      padding: 12px 32px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(40, 190, 68, 0.4);
+    }
+    .ad-popup-close-btn:hover:not(:disabled) {
+      background: #2dd04a;
+      transform: translateY(-1px);
+    }
+    .ad-popup-close-btn:disabled {
+      background: #333;
+      color: #666;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    /* Lightbox modal */
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.9);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      cursor: zoom-out;
+    }
+
+    #lightbox.show {
+      display: flex;
+    }
+
+    #lightbox img {
+      max-width: 90vw;
+      max-height: 90vh;
+      object-fit: contain;
+      border-radius: 4px;
+    }
+
+    #lightbox .lightbox-close {
+      position: absolute;
+      top: 16px;
+      right: 20px;
+      color: #e2e2e2;
+      font-size: 28px;
+      cursor: pointer;
+      line-height: 1;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <h1>
+      <span class="title-main">XTOOL <span class="title-sub">激光预览工具</span> <img src="/api/laser-preview/asset/Untitled.svg" alt="" class="header-logo">
+      <span class="tagline-area">
+        <span class="tagline-item">
+          <span class="tagline-icon">🎯</span>
+          <span class="tagline-lines">
+            <span class="tagline-main-text">高精度仿真</span>
+            <span class="tagline-sub-text">准确率≥95%</span>
+          </span>
+        </span>
+        <span class="tagline-item">
+          <span class="tagline-icon">⚡</span>
+          <span class="tagline-lines">
+            <span class="tagline-main-text">高效提效</span>
+            <span class="tagline-sub-text">节省80%设计时间</span>
+          </span>
+        </span>
+        <span class="tagline-item">
+          <span class="tagline-icon">⚙️</span>
+          <span class="tagline-lines">
+            <span class="tagline-main-text">xtool专属优化</span>
+            <span class="tagline-sub-text">完美适配设备参数</span>
+          </span>
+        </span>
+      </span>
+    </h1>
+
+  </header>
+
+  <!-- MAIN -->
+  <main>
+
+    <!-- COL 1: Drawing Type Selection -->
+    <div class="col1">
+      <div class="ai-drawing-type" data-type="vector" id="typeVector">
+        <div class="type-icon">⬡</div>
+        <div class="type-info">
+          <div class="type-name">矢量图 Vector</div>
+          <div class="type-desc">DXF, SVG</div>
+        </div>
+        <div class="check">✓</div>
+      </div>
+      <div class="ai-drawing-type" data-type="jarvis" id="typeJarvis">
+        <div class="type-icon">◈</div>
+        <div class="type-info">
+          <div class="type-name">Jarvis位图 Jarvis Bitmap</div>
+          <div class="type-desc">PNG, JPG, JPEG, BMP,<br>WEBP, TIF, TIFF, GIF</div>
+        </div>
+        <div class="check">✓</div>
+      </div>
+      <div class="ai-drawing-type" data-type="depth" data-machines="F2U UV" id="typeDepth">
+        <div class="type-icon">▲</div>
+        <div class="type-info">
+          <div class="type-name">浮雕深度图</div>
+          <div class="type-desc">PNG, JPG, JPEG, BMP,<br>WEBP, TIF, TIFF, GIF</div>
+        </div>
+        <div class="check">✓</div>
+      </div>
+    </div>
+
+    <!-- COL 2: Center -->
+    <div class="col2">
+
+      <!-- Row 1: Three panels -->
+      <div class="c2-row c2-row-1">
+        <div class="three-panel">
+          <!-- Upload panel -->
+          <div class="panel">
+            <div class="panel-label">
+              上传产品图
+              <button class="flat-detect-btn" id="flatDetectBtn" title="检测产品平面区域">平面检测</button>
+              <div class="flat-tip" id="flatTip">浅绿色区域是检测到适合实际雕刻的平面<button class="flat-tip-close" id="flatTipClose">&times;</button></div>
+              <button class="trash-btn" id="trashBtn" title="清除图片">🗑</button>
+            </div>
+            <div class="upload-box" id="uploadBox">
+              <div id="uploadPlaceholder">
+                <div class="upload-hint">点击或拖拽上传图片</div>
+              </div>
+              <img id="previewImg" src="" alt="" style="display:none">
+              <canvas id="cropCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;display:none;"></canvas>
+            </div>
+            <input type="file" id="uploadInput" accept="image/*">
+          </div>
+          <!-- AI recommended drawings -->
+          <div class="panel">
+            <div class="panel-label">
+              <div style="position:relative;display:inline-block;">
+                <button class="clickable-title" id="btnAiDrawingTitle" onclick="toggleDrawingTypeDropdown()">推荐图纸 ▾</button>
+                <div class="drawing-type-dropdown" id="drawingTypeDropdown">
+                  <div class="dropdown-item" data-type="vector" id="ddVector">
+                    <span class="dropdown-icon">⬡</span>
+                    <span class="dropdown-text">矢量图 Vector</span>
+                  </div>
+                  <div class="dropdown-item" data-type="jarvis" id="ddJarvis">
+                    <span class="dropdown-icon">◈</span>
+                    <span class="dropdown-text">Jarvis位图 Bitmap</span>
+                  </div>
+                  <div class="dropdown-item" data-type="depth" id="ddDepth">
+                    <span class="dropdown-icon">▲</span>
+                    <span class="dropdown-text">浮雕深度图 Depth</span>
+                  </div>
+                </div>
+              </div>
+              <button class="upload-drawing-btn" id="btnUploadDrawing" onclick="document.getElementById('userDrawingInput').click()">上传图纸</button>
+              <input type="file" id="userDrawingInput" style="display:none" accept="image/*,.dxf,.svg" onchange="handleUserDrawingUpload(this.files[0]);this.value=''">
+            </div>
+            <div class="panel-box" id="aiDrawingBox">
+              <span class="panel-placeholder">点击「推荐图纸」选择图纸类型</span>
+            </div>
+          </div>
+          <!-- Preview panel -->
+          <div class="panel">
+            <div class="panel-label">
+              预览效果图
+            </div>
+            <div class="panel-box" id="previewBox">
+              <span class="panel-placeholder">等待材质和图纸选择后自动生成</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 2: Params -->
+      <div class="c2-row c2-row-2">
+        <div class="param-row">
+          <span class="param-label">材质种类</span>
+          <div class="param-value" id="materialValue">—</div>
+        </div>
+        <div class="param-row">
+<span class="param-label">当前图纸</span>
+          <div class="param-value" id="aiDrawingValue"></div>
+        </div>
+      </div>
+
+      <!-- Row 3: Buttons -->
+      <div class="c2-row c2-row-3">
+        <button class="btn btn-green" onclick="exportPreview()">导出效果图</button>
+        <button class="btn btn-orange" id="btnExportDrawing" onclick="exportCurrentDrawing()">导出加工图纸</button>
+      </div>
+    </div>
+
+    <!-- COL 3: Right Params -->
+    <div class="col3">
+      <div class="col3-bg" id="col3Bg"></div>
+
+      <!-- Machine Select -->
+      <div class="c3-section">
+        <div class="c3-section-title green">机器选择</div>
+        <select id="machineSelect" onchange="onFrontendMachineChange()">
+          <option value="F2U UV">xTool F2 Ultra UV</option>
+          <option value="xTool M2">xTool M2</option>
+        </select>
+      </div>
+
+      <!-- Material Select -->
+      <div class="c3-section" id="sectionMaterial" style="display:none">
+        <div class="c3-section-title">材质选择</div>
+        <div class="combobox" id="materialCombobox">
+          <div class="combobox-input-wrap">
+            <input type="text" id="materialInput" class="combobox-input" placeholder="— 搜索或选择材质 —" autocomplete="off" />
+            <button type="button" class="combobox-toggle" id="materialToggle" tabindex="-1">▼</button>
+          </div>
+          <div class="combobox-dropdown" id="materialDropdown">
+            <div class="combobox-option" data-value="">— 材质选择 —</div>
+          </div>
+        </div>
+        <select id="materialSelect" style="display:none">
+          <option value="">— 材质选择 —</option>
+        </select>
+      </div>
+
+      <!-- Effect Type -->
+      <div class="c3-section hidden" id="sectionEffectType">
+        <div class="c3-section-title">效果类型</div>
+        <div class="effect-type-options" id="effectTypeOptions">
+          <button class="effect-type-btn" id="btnRefParams">参考参数</button>
+          <button class="effect-type-btn" id="btnShallow">浅度效果</button>
+          <button class="effect-type-btn" id="btnDeep">深度效果</button>
+        </div>
+      </div>
+
+      <!-- Recommended Params -->
+      <div class="c3-section hidden" id="sectionRecommend">
+        <div class="c3-section-title">参考参数</div>
+        <div class="param-list"></div>
+      </div>
+
+      <div class="col1-logo">
+        <img src="" alt="xTool Logo" id="col1LogoImg" style="width:188px;height:auto;max-height:60px;object-fit:contain;flex-shrink:0;">
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Ad Popup Overlay -->
+  <div class="ad-popup-overlay" id="adPopupOverlay">
+    <div class="ad-popup-box">
+      <div class="ad-popup-title">🔥 XTOOL 激光预览工具</div>
+      <div class="ad-popup-content">
+        正在加载智能抠图模型...<br>
+        模型加载完成后即可开始使用
+      </div>
+      <div class="ad-popup-loading" id="adPopupLoading">
+        <div class="ad-popup-spinner"></div>
+        <span id="adPopupStatus">正在下载模型...</span>
+      </div>
+      <div class="ad-popup-progress">
+        <div class="ad-popup-progress-bar" id="adPopupProgressBar"></div>
+      </div>
+      <button class="ad-popup-close-btn" id="adPopupCloseBtn" disabled>请等待模型加载完成</button>
+    </div>
+  </div>
+
+  <script>
+    // ===== Image Upload =====
+    const uploadBox = document.getElementById('uploadBox');
+    const uploadInput = document.getElementById('uploadInput');
+    const previewImg = document.getElementById('previewImg');
+    const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+    const trashBtn = document.getElementById('trashBtn');
+    const aiDrawingValue = document.getElementById('aiDrawingValue');
+
+    let clickTimer = null;
+
+    // ===== Background removal via remove.bg API =====
+    var _bgRemovalCancelled = false;
+    var _bgRemovalInProgress = false;
+    var _isFirstUpload = true;
+    var _bgRemovalReady = true;
+    var _bgRemovalFailed = false;
+    var _removeBgQuotaExhausted = false;
+
+    var _removeBgRequestId = 0;
+    function removeBackgroundViaAPI(base64Data) {
+      return new Promise(function(resolve, reject) {
+        if (_removeBgQuotaExhausted) {
+          reject(new Error('QUOTA_EXHAUSTED'));
+          return;
+        }
+        var requestId = 'rm-bg-' + (++_removeBgRequestId) + '-' + Date.now();
+        function handler(event) {
+          if (event.data && event.data.type === 'REMOVE_BACKGROUND_RESPONSE' && event.data.requestId === requestId) {
+            window.removeEventListener('message', handler);
+            if (event.data.success) {
+              resolve(event.data.imageBase64);
+            } else {
+              if (event.data.error && event.data.error.indexOf('QUOTA_EXHAUSTED') !== -1) {
+                _removeBgQuotaExhausted = true;
+                reject(new Error('QUOTA_EXHAUSTED'));
+              } else {
+                reject(new Error(event.data.error || 'remove.bg API failed'));
+              }
+            }
+          }
+        }
+        window.addEventListener('message', handler);
+        window.parent.postMessage({
+          type: 'REMOVE_BACKGROUND_REQUEST',
+          requestId: requestId,
+          imageBase64: base64Data
+        }, '*');
+        setTimeout(function() {
+          window.removeEventListener('message', handler);
+          reject(new Error('remove.bg API timeout'));
+        }, 30000);
+      });
+    }
+    function _showDepthUnavailableTip() {
+      var existing = document.getElementById('depthUnavailableTip');
+      if (existing) return;
+      var tip = document.createElement('div');
+      tip.id = 'depthUnavailableTip';
+      tip.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;background:#fef3c7;color:#92400e;padding:12px 18px;border-radius:10px;font-size:13px;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,.15);line-height:1.5;';
+      tip.innerHTML = '⚠️ 平面检测模型加载失败，「平面高亮」功能暂不可用。其他功能不受影响。<br><span style="font-size:11px;color:#b45309;opacity:.8">可能原因：网络限制或浏览器隐私保护拦截了外部CDN</span>';
+      var closeBtn = document.createElement('span');
+      closeBtn.textContent = '✕';
+      closeBtn.style.cssText = 'float:right;cursor:pointer;margin-left:8px;opacity:.7;';
+      closeBtn.onclick = function() { tip.remove(); };
+      tip.prepend(closeBtn);
+      document.body.appendChild(tip);
+      setTimeout(function() { if (tip.parentNode) tip.remove(); }, 12000);
+    }
+    _loadDepthModel().catch(function(e) { console.warn('Depth model preload:', e.message); });
+
+    async function segmentImage(imgElement) {
+      var t0 = performance.now();
+      var MAX_DIM = 1024;
+      var ow = imgElement.naturalWidth;
+      var oh = imgElement.naturalHeight;
+      var rscale = Math.min(1, MAX_DIM / Math.max(ow, oh));
+      var rw = Math.round(ow * rscale);
+      var rh = Math.round(oh * rscale);
+      var canvas = document.createElement('canvas');
+      canvas.width = rw;
+      canvas.height = rh;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(imgElement, 0, 0, rw, rh);
+      var base64Data = canvas.toDataURL('image/png').replace(/^data:image\/\w+;base64,/, '');
+      var t1 = performance.now();
+      var resultDataUrl = await removeBackgroundViaAPI(base64Data);
+      var t2 = performance.now();
+      console.log('remove.bg: encode=' + (t1 - t0).toFixed(0) + 'ms, api=' + (t2 - t1).toFixed(0) + 'ms');
+      var resultImg = new Image();
+      await new Promise(function(res, rej) { resultImg.onload = res; resultImg.onerror = rej; resultImg.src = resultDataUrl; });
+      var resultCanvas = document.createElement('canvas');
+      resultCanvas.width = rw;
+      resultCanvas.height = rh;
+      var resultCtx = resultCanvas.getContext('2d');
+      resultCtx.drawImage(resultImg, 0, 0, rw, rh);
+      var resultData = resultCtx.getImageData(0, 0, rw, rh);
+      var alphaData = new Uint8Array(rw * rh);
+      for (var i = 0; i < rw * rh; i++) {
+        alphaData[i] = resultData.data[i * 4 + 3];
+      }
+      var t3 = performance.now();
+      console.log('remove.bg total: ' + (t3 - t0).toFixed(0) + 'ms');
+      return { data: alphaData, width: rw, height: rh };
+    }
+
+    uploadBox.addEventListener('click', (e) => {
+      if (e.detail === 2) return;
+      if (_removeBgQuotaExhausted) return;
+      // After upload: clicking the box does nothing until trash clears it
+      if (previewImg.src && previewImg.style.display !== 'none') return;
+      clickTimer = setTimeout(() => {
+        uploadInput.click();
+        clickTimer = null;
+      }, 250);
+    });
+
+    uploadBox.addEventListener('dblclick', (e) => {
+      clearTimeout(clickTimer);
+      clickTimer = null;
+      const img = previewImg;
+      if (img && img.src) openLightbox(img.src);
+    });
+
+    uploadBox.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadBox.classList.add('drag-over');
+    });
+
+    uploadBox.addEventListener('dragleave', () => {
+      uploadBox.classList.remove('drag-over');
+    });
+
+    uploadBox.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadBox.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        loadImage(file);
+      }
+    });
+
+    uploadInput.addEventListener('change', () => {
+      const file = uploadInput.files[0];
+      if (file) loadImage(file);
+    });
+
+    function detectAndRemoveHoles(w, h, aiAlpha, origRgb) {
+      var n = w * h;
+      var result = new Uint8Array(n);
+      for (var i = 0; i < n; i++) result[i] = aiAlpha[i];
+      var stk = new Int32Array(n);
+      var sp = 0;
+      var extAi = new Uint8Array(n);
+      var AI_FF = 80;
+      for (var x = 0; x < w; x++) {
+        if (aiAlpha[x] < AI_FF) { extAi[x] = 1; stk[sp++] = x; }
+        var bi = (h-1)*w + x;
+        if (aiAlpha[bi] < AI_FF && !extAi[bi]) { extAi[bi] = 1; stk[sp++] = bi; }
+      }
+      for (var y = 1; y < h-1; y++) {
+        if (aiAlpha[y*w] < AI_FF && !extAi[y*w]) { extAi[y*w] = 1; stk[sp++] = y*w; }
+        var ri = y*w+w-1;
+        if (aiAlpha[ri] < AI_FF && !extAi[ri]) { extAi[ri] = 1; stk[sp++] = ri; }
+      }
+      while (sp > 0) {
+        var ci = stk[--sp];
+        var cx = ci % w;
+        if (cx > 0 && aiAlpha[ci-1] < AI_FF && !extAi[ci-1]) { extAi[ci-1] = 1; stk[sp++] = ci-1; }
+        if (cx < w-1 && aiAlpha[ci+1] < AI_FF && !extAi[ci+1]) { extAi[ci+1] = 1; stk[sp++] = ci+1; }
+        if (ci >= w && aiAlpha[ci-w] < AI_FF && !extAi[ci-w]) { extAi[ci-w] = 1; stk[sp++] = ci-w; }
+        if (ci < n-w && aiAlpha[ci+w] < AI_FF && !extAi[ci+w]) { extAi[ci+w] = 1; stk[sp++] = ci+w; }
+      }
+      for (var i = 0; i < n; i++) {
+        if (extAi[i]) result[i] = 0;
+      }
+      var snap = new Uint8Array(result);
+      for (var y = 2; y < h-2; y++) {
+        for (var x = 2; x < w-2; x++) {
+          var i = y*w + x;
+          if (snap[i] > 0 && snap[i] < 40) {
+            var opq = 0;
+            for (var dy = -1; dy <= 1; dy++) {
+              for (var dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;
+                if (snap[(y+dy)*w + (x+dx)] > 120) opq++;
+              }
+            }
+            if (opq < 2) result[i] = 0;
+          }
+        }
+      }
+      return result;
+    }
+
+    function _resetUploadPlaceholder() {
+      previewImg.style.display = 'none';
+      previewImg.style.visibility = '';
+      uploadPlaceholder.style.display = 'block';
+      uploadPlaceholder.style.zIndex = '';
+      uploadPlaceholder.style.background = '';
+      uploadPlaceholder.innerHTML = '<div class="upload-hint">点击或拖拽上传图片</div>';
+    }
+
+    function _showUploadedInstruction() {
+      previewImg.style.visibility = 'hidden';
+      uploadPlaceholder.style.display = 'flex';
+      uploadPlaceholder.style.zIndex = '1';
+      uploadPlaceholder.style.background = '';
+      var _hintText = _isFirstUpload ? '刷新后第一张产品图识别较慢，麻烦耐心等待一下哦<br><br>' : '';
+      _isFirstUpload = false;
+      uploadPlaceholder.innerHTML = '<div style="text-align:center;color:#888;font-size:13px;line-height:2.2;padding:260px 16px 0;">' + _hintText + '接下来：<br>1、上传图纸 or 选择推荐图纸。<br>2、左侧栏中选择对应材质<br>即可得到仿真效果。</div>';
+    }
+
+    async function removeBgAndCreateMask(imageSrc) {
+      _bgRemovalCancelled = false;
+      _bgRemovalInProgress = true;
+      try {
+        previewImg.style.visibility = 'hidden';
+        var origImg = new Image();
+        await new Promise(function(res, rej) { origImg.onload = res; origImg.onerror = rej; origImg.src = imageSrc; });
+        if (_bgRemovalCancelled) { _resetUploadPlaceholder(); return; }
+        var segResult = await segmentImage(origImg);
+        if (_bgRemovalCancelled) { _resetUploadPlaceholder(); return; }
+        var segW = segResult.width;
+        var segH = segResult.height;
+        var t4 = performance.now();
+        var cleanedAlpha = detectAndRemoveHoles(segW, segH, segResult.data, null);
+        var t5 = performance.now();
+        console.log('Hole detection: ' + (t5 - t4).toFixed(0) + 'ms at ' + segW + 'x' + segH);
+        var segRgbCv = document.createElement('canvas');
+        segRgbCv.width = segW; segRgbCv.height = segH;
+        var segRgbCtx = segRgbCv.getContext('2d');
+        segRgbCtx.drawImage(origImg, 0, 0, segW, segH);
+        var bx1 = segW, by1 = segH, bx2 = 0, by2 = 0;
+        for (var my = 0; my < segH; my++) {
+          for (var mx = 0; mx < segW; mx++) {
+            if (cleanedAlpha[my * segW + mx] > 10) {
+              if (mx < bx1) bx1 = mx;
+              if (my < by1) by1 = my;
+              if (mx > bx2) bx2 = mx;
+              if (my > by2) by2 = my;
+            }
+          }
+        }
+        var origW = origImg.naturalWidth;
+        var origH = origImg.naturalHeight;
+        var scaleX = origW / segW;
+        var scaleY = origH / segH;
+        var t6 = performance.now();
+        var alphaCv = document.createElement('canvas');
+        alphaCv.width = segW;
+        alphaCv.height = segH;
+        var alphaCtx = alphaCv.getContext('2d');
+        var alphaImgData = alphaCtx.createImageData(segW, segH);
+        for (var i = 0; i < segW * segH; i++) {
+          var a = cleanedAlpha[i];
+          var idx = i * 4;
+          alphaImgData.data[idx] = a;
+          alphaImgData.data[idx + 1] = a;
+          alphaImgData.data[idx + 2] = a;
+          alphaImgData.data[idx + 3] = 255;
+        }
+        alphaCtx.putImageData(alphaImgData, 0, 0);
+        var scaledCv = document.createElement('canvas');
+        scaledCv.width = origW;
+        scaledCv.height = origH;
+        var scaledCtx = scaledCv.getContext('2d');
+        scaledCtx.imageSmoothingEnabled = true;
+        scaledCtx.imageSmoothingQuality = 'high';
+        scaledCtx.drawImage(alphaCv, 0, 0, origW, origH);
+        var scaledAlphaData = scaledCtx.getImageData(0, 0, origW, origH);
+        var maskCv = document.createElement('canvas');
+        maskCv.width = origW;
+        maskCv.height = origH;
+        var maskCtx = maskCv.getContext('2d');
+        maskCtx.drawImage(origImg, 0, 0);
+        var imgData = maskCtx.getImageData(0, 0, origW, origH);
+        var srcPx = scaledAlphaData.data;
+        var dstPx = imgData.data;
+        for (var i = 0, len = origW * origH; i < len; i++) {
+          var a = srcPx[i * 4];
+          var di = i * 4;
+          dstPx[di + 3] = a;
+          if (a === 0) {
+            dstPx[di] = 0;
+            dstPx[di + 1] = 0;
+            dstPx[di + 2] = 0;
+          }
+        }
+        maskCtx.putImageData(imgData, 0, 0);
+        var t7 = performance.now();
+        console.log('Alpha upscale+apply: ' + (t7 - t6).toFixed(0) + 'ms');
+        var obx1 = Math.round(bx1 * scaleX);
+        var oby1 = Math.round(by1 * scaleY);
+        var obx2 = Math.round(bx2 * scaleX);
+        var oby2 = Math.round(by2 * scaleY);
+        productMaskCanvas = maskCv;
+        productMaskBounds = (obx2 > obx1 && oby2 > oby1) ? { x: obx1, y: oby1, w: obx2 - obx1, h: oby2 - oby1 } : null;
+        window.__bmMaskPx = null;
+        var flatResult = await detectFlatSurfaces(segRgbCv, cleanedAlpha);
+        if (flatResult) {
+          _flatSurfaceMask = flatResult.mask;
+          _flatSurfaceBounds = flatResult.bounds;
+          _flatSurfaceW = flatResult.width;
+          _flatSurfaceH = flatResult.height;
+          _showFlatHighlight = true;
+          document.getElementById('flatDetectBtn').classList.add('visible', 'active');
+          if (!_flatTipDismissed) showFlatTip();
+        } else {
+          _flatSurfaceMask = null;
+          _flatSurfaceBounds = null;
+          _flatSurfaceW = 0;
+          _flatSurfaceH = 0;
+          _showFlatHighlight = false;
+          document.getElementById('flatDetectBtn').classList.add('visible');
+          document.getElementById('flatDetectBtn').classList.remove('active');
+        }
+        var processedUrl = maskCv.toDataURL('image/png');
+        previewImg.onload = function() {
+          previewImg.onload = null;
+          _bgRemovalInProgress = false;
+          resizeCropCanvas();
+          cropBox = null;
+          showCropOverlay();
+          if (recognizedMaterial && currentDrawing && currentType && effectTypeSelected) {
+            generatePreview();
+          }
+        };
+        previewImg.src = processedUrl;
+        previewImg.style.display = 'block';
+        previewImg.style.visibility = '';
+        uploadPlaceholder.style.display = 'none';
+      } catch (err) {
+        _bgRemovalInProgress = false;
+        if (_bgRemovalCancelled) { _resetUploadPlaceholder(); return; }
+        console.warn('Background removal failed:', err);
+        productMaskCanvas = null;
+        productMaskBounds = null;
+        if (err.message === 'QUOTA_EXHAUSTED') {
+          previewImg.style.display = 'none';
+          previewImg.style.visibility = '';
+          uploadPlaceholder.style.display = 'flex';
+          uploadPlaceholder.style.zIndex = '1';
+          uploadPlaceholder.style.background = '';
+          uploadPlaceholder.innerHTML = '<div style="text-align:center;color:#e74c3c;font-size:14px;line-height:2;padding:220px 20px 0;font-weight:500;">图像处理额度已耗尽<br><span style="font-size:13px;color:#888;font-weight:400;">请飞书联系：李星雨</span></div>';
+          uploadInput.disabled = true;
+          uploadBox.style.opacity = '0.6';
+          uploadBox.style.cursor = 'not-allowed';
+        } else {
+          previewImg.style.display = 'block';
+          _showUploadedInstruction();
+        }
+      }
+    }
+
+    function loadImage(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        var dataUrl = e.target.result;
+        previewImg.src = dataUrl;
+        previewImg.style.display = 'block';
+        _showUploadedInstruction();
+        trashBtn.classList.add('visible');
+        removeBgAndCreateMask(dataUrl);
+
+        // Auto-analyze material via parent
+        try {
+            var base64Data = dataUrl.split(',')[1];
+            if (base64Data) {
+              var requestId = 'mat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+              window.__pendingRequests[requestId] = {
+                resolve: function(result) {
+                  if (result && result.success && result.material) {
+                    recognizedMaterial = result.material;
+                    var cleanRaw = (result.rawText || result.material).replace(/<[|\uff5c][^|\uff5c]*[|\uff5c]>/g, '').replace(/\s+/g, ' ').trim();
+                    _aiRecognizedText = cleanRaw || result.material;
+                    document.getElementById('materialValue').textContent = _aiRecognizedText;
+                    if (materialOptions.length > 0) {
+                      autoSelectMaterialByKeywords(_aiRecognizedText);
+                    } else {
+                      _pendingAiRawText = _aiRecognizedText;
+                      syncMaterialDropdown(result.material);
+                    }
+                  }
+                },
+                reject: function() {}
+              };
+              window.parent.postMessage({
+                type: 'ANALYZE_MATERIAL_REQUEST',
+                requestId: requestId,
+                imageBase64: base64Data
+              }, '*');
+            }
+          } catch(err) {
+            console.warn('Material analysis request failed:', err);
+          }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // Material select change → update recognizedMaterial and refetch drawing
+
+    function fetchDrawingPreview() {
+      if (!currentType) { console.log('[AI Drawing] fetchDrawingPreview: no currentType'); return; }
+      const typeMap = { vector: 'vector', jarvis: 'bitmap', depth: 'depth' };
+      const apiType = typeMap[currentType];
+      if (!apiType) { console.log('[AI Drawing] fetchDrawingPreview: no apiType for', currentType); return; }
+      console.log('[AI Drawing] fetchDrawingPreview: fetching', `/api/public/drawings?type=${apiType}`);
+      __fetchApi(`/api/public/drawings?type=${apiType}`)
+        .then(r => r.json())
+        .then(async data => {
+          console.log('[AI Drawing] API response:', data);
+          const drawings = data.items || [];
+          console.log('[AI Drawing] drawings count:', drawings.length);
+          if (drawings.length === 0) return;
+          aiDrawingsList = drawings;
+          aiDrawingsIndex = 0;
+          const sample = drawings[0];
+          const imgSrc = sample._drawingUrl || sample.filepath;
+          const aiDrawingBox = document.getElementById('aiDrawingBox');
+          try {
+            const blobUrl = await window.__fetchImg(imgSrc);
+            let displaySrc = blobUrl;
+            if (currentType === 'jarvis') { displaySrc = await processBitmapThumbnail(blobUrl); }
+            aiDrawingBox.innerHTML = `<img src="${displaySrc}" style="width:100%;height:100%;object-fit:contain;border-radius:6px;" onerror="this.onerror=null;this.parentElement.innerHTML='<span class=\\'panel-placeholder\\'>图片加载失败</span>';" />`;
+          } catch(e) {
+            console.error('[AI Drawing] img fetch error:', e);
+            aiDrawingBox.innerHTML = '<span class="panel-placeholder">图片加载失败</span>';
+          }
+          currentDrawing = sample;
+          drawingSource = 'ai';
+          updateDrawingUI();
+          if (previewImg.src && previewImg.style.display !== 'none' && !_bgRemovalInProgress && recognizedMaterial && effectTypeSelected) { generatePreview(); }
+          return drawings;
+        })
+        .catch((err) => { console.error('[AI Drawing] fetchDrawingPreview error:', err); });
+    }
+
+    function loadAIDrawing() {
+      console.log('[AI Drawing] loadAIDrawing called', { currentType, recognizedMaterial, aiDrawingsListLength: aiDrawingsList.length });
+      if (!currentType) {
+        toggleDrawingTypeDropdown();
+        return;
+      }
+      // Cycle to next drawing in list, or refetch if list is empty
+      if (aiDrawingsList.length > 0) {
+        aiDrawingsIndex = (aiDrawingsIndex + 1) % aiDrawingsList.length;
+        const sample = aiDrawingsList[aiDrawingsIndex];
+        const imgSrc = sample._drawingUrl || sample.filepath;
+        const aiDrawingBox = document.getElementById('aiDrawingBox');
+        (async () => {
+          try {
+            const blobUrl = await window.__fetchImg(imgSrc);
+            let displaySrc = blobUrl;
+            if (currentType === 'jarvis') { displaySrc = await processBitmapThumbnail(blobUrl); }
+            aiDrawingBox.innerHTML = `<img src="${displaySrc}" style="width:100%;height:100%;object-fit:contain;border-radius:6px;" onerror="this.onerror=null;this.parentElement.innerHTML='<span class=\\'panel-placeholder\\'>图片加载失败</span>';" />`;
+          } catch(e) {
+            console.error('[AI Drawing] img fetch error:', e);
+            aiDrawingBox.innerHTML = '<span class="panel-placeholder">图片加载失败</span>';
+          }
+        })();
+        currentDrawing = sample;
+        drawingSource = 'ai';
+        updateDrawingUI();
+        if (previewImg.src && previewImg.style.display !== 'none' && !_bgRemovalInProgress && recognizedMaterial && effectTypeSelected) { generatePreview(); }
+      } else {
+        fetchDrawingPreview();
+      }
+    }
+
+    async function processBitmapThumbnail(imgSrc) {
+      return new Promise(function(resolve) {
+        var img = new Image();
+        img.onload = function() {
+          var c = document.createElement('canvas');
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          var ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          var data = ctx.getImageData(0, 0, c.width, c.height);
+          var px = data.data;
+          var _opaqueN = 0;
+          for (var i = 0; i < px.length; i += 4) { if (px[i+3] >= 10) _opaqueN++; }
+          var _totalN = px.length / 4;
+          var _isTransBg = _opaqueN < _totalN * 0.5;
+          for (var i = 0; i < px.length; i += 4) {
+            if (px[i + 3] < 10) {
+              px[i] = 255; px[i+1] = 255; px[i+2] = 255; px[i+3] = 255;
+            } else if (_isTransBg) {
+              px[i] = 0; px[i+1] = 0; px[i+2] = 0; px[i+3] = 255;
+            } else {
+              var _lum = 0.299*px[i] + 0.587*px[i+1] + 0.114*px[i+2];
+              var _g = Math.round(_lum);
+              px[i] = _g; px[i+1] = _g; px[i+2] = _g; px[i+3] = 255;
+            }
+          }
+          ctx.putImageData(data, 0, 0);
+          resolve(c.toDataURL('image/png'));
+        };
+        img.onerror = function() { resolve(imgSrc); };
+        img.src = imgSrc;
+      });
+    }
+
+    function detectDrawingType(file) {
+      const ext = (file.name || '').split('.').pop().toLowerCase();
+      const mime = (file.type || '').toLowerCase();
+      if (ext === 'svg' || mime === 'image/svg+xml' || ext === 'dxf') {
+        return 'vector';
+      }
+      if (['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp', 'tif', 'tiff'].includes(ext)) {
+        return 'jarvis';
+      }
+      if (mime.startsWith('image/')) {
+        return 'jarvis';
+      }
+      return null;
+    }
+
+    function handleUserDrawingUpload(file) {
+      if (!file) {
+        alert('请选择图片文件');
+        return;
+      }
+      const detectedType = detectDrawingType(file);
+      if (!detectedType) {
+        alert('无法识别文件类型，请上传 SVG/DXF（矢量图）或 PNG/JPG 等图片（位图）');
+        return;
+      }
+      if (!currentType || currentType !== detectedType) {
+        const col1Map = { vector: typeVector, jarvis: typeJarvis, depth: typeDepth };
+        handleDrawingTypeClick(col1Map[detectedType], detectedType);
+      }
+      const typeMap = { vector: 'vector', jarvis: 'bitmap', depth: 'depth' };
+      const apiType = typeMap[currentType];
+      if (!apiType) return;
+
+      const aiDrawingBox = document.getElementById('aiDrawingBox');
+      aiDrawingBox.innerHTML = '<span class="panel-placeholder">上传中，请稍候…</span>';
+
+      const objectUrl = URL.createObjectURL(file);
+      (async () => {
+        let displaySrc = objectUrl;
+        if (detectedType === 'jarvis') {
+          displaySrc = await processBitmapThumbnail(objectUrl);
+        }
+        aiDrawingBox.innerHTML = `<img src="${displaySrc}" style="width:100%;height:100%;object-fit:contain;border-radius:6px;" />`;
+      })();
+      currentDrawing = { filepath: objectUrl, filename: file.name, type: apiType };
+      drawingSource = 'user';
+      aiDrawingsList = []; // user uploaded, clear AI list
+      aiDrawingsIndex = 0;
+      updateDrawingUI();
+      if (previewImg.src && previewImg.style.display !== 'none' && !_bgRemovalInProgress && recognizedMaterial && effectTypeSelected) { generatePreview(); }
+    }
+
+    function updateDrawingUI() {
+      const uploadBtn = document.getElementById('btnUploadDrawing');
+      const titleBtn = document.getElementById('btnAiDrawingTitle');
+      const aiDrawingBox = document.getElementById('aiDrawingBox');
+
+      if (currentDrawing && aiDrawingBox.querySelector('img')) {
+        const sourceTag = document.createElement('span');
+        sourceTag.className = 'ai-drawing-source-tag';
+        sourceTag.textContent = drawingSource === 'user' ? '[用户]' : '[AI]';
+        // Remove existing tag if any
+        const existing = aiDrawingBox.parentElement.querySelector('.ai-drawing-source-tag');
+        if (existing) existing.remove();
+        // Insert after image inside the box
+        const label = aiDrawingBox.parentElement.querySelector('.panel-label');
+        const btns = label.querySelectorAll('button');
+        btns[btns.length - 1].after(sourceTag);
+      }
+    }
+
+    function exportCurrentDrawing() {
+      if (!currentDrawing) {
+        alert('请先点击「推荐图纸」选择图纸类型');
+        return;
+      }
+      const url = currentDrawing._drawingUrl || currentDrawing.filepath;
+      const filename = currentDrawing.filename || 'drawing';
+      (async function() {
+        try {
+          var blobUrl = url;
+          if (window.__fetchImg && (url.includes('/api/public/') || url.startsWith('blob:') === false)) {
+            blobUrl = await window.__fetchImg(url);
+          }
+          var resp = await fetch(blobUrl);
+          var blob = await resp.blob();
+          var downloadUrl = URL.createObjectURL(blob);
+          var link = document.createElement('a');
+          link.href = downloadUrl;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(function() { URL.revokeObjectURL(downloadUrl); }, 1000);
+        } catch(e) {
+          console.error('exportCurrentDrawing error:', e);
+          alert('导出失败：' + e.message);
+        }
+      })();
+    }
+
+    function exportPreview() {
+      const previewBox = document.getElementById('previewBox');
+      const img = previewBox.querySelector('img');
+      if (!img) {
+        alert('请先生成预览效果图');
+        return;
+      }
+      const link = document.createElement('a');
+      link.href = img.src;
+      link.download = 'preview-' + Date.now() + '.png';
+      link.target = '_blank';
+      link.click();
+    }
+
+    // ===== Generate Preview (3-layer composite) =====
+    async function generatePreview() {
+      const previewBox = document.getElementById('previewBox');
+      console.log('generatePreview called', { recognizedMaterial, currentType, currentDrawing, previewImgSrc: previewImg.src });
+
+      const missing = [];
+      if (!previewImg.src || previewImg.style.display === 'none') missing.push('产品图');
+      if (!currentType) missing.push('图纸类型');
+      if (!recognizedMaterial) missing.push('材质');
+      if (!effectTypeSelected) missing.push('效果类型');
+      if (!currentDrawing) missing.push('图纸');
+      if (missing.length > 0) {
+        previewBox.innerHTML = `<span class="panel-placeholder">请先选择：${missing.join('、')}</span>`;
+        return;
+      }
+
+      previewBox.innerHTML = '<span class="panel-placeholder">处理中，请稍候…</span>';
+
+      try {
+        const [productImg, drawingImg, refImg] = await Promise.all([
+          loadImageElement(previewImg.src),
+            loadImageElement(currentDrawing._drawingUrl || currentDrawing.filepath),
+          loadSampleRefImage(currentEffectType || 'ref')
+        ]);
+
+        if (!refImg) {
+          previewBox.innerHTML = '<span class="panel-placeholder">当前材质无参考雕刻图</span>';
+          return;
+        }
+
+        const W = productImg.naturalWidth || productImg.width;
+        const H = productImg.naturalHeight || productImg.height;
+        const drawW = drawingImg.naturalWidth || drawingImg.width;
+        const drawH = drawingImg.naturalHeight || drawingImg.height;
+        const refW = refImg.naturalWidth || refImg.width;
+        const refH = refImg.naturalHeight || refImg.height;
+
+        const scale = 2;
+
+        // Ensure drawing is at least as large as product (preserving aspect ratio)
+        const drawScale = Math.max(W / drawW, H / drawH, 1);
+        const drawW2 = drawW * drawScale * scale;
+        const drawH2 = drawH * drawScale * scale;
+
+        // Canvas size = max of product (2x), drawing (scaled), reference
+        const CW = Math.max(W * scale, drawW2, refW);
+        const CH = Math.max(H * scale, drawH2, refH);
+
+        // Drawing position (centered, scaled to match product size, then 2x)
+        const dx = (CW - drawW2) / 2;
+        const dy = (CH - drawH2) / 2;
+
+        // Tiled product (2x, mirror-tiled so adjacent tiles match at edges)
+        const prodLayer = document.createElement('canvas');
+        prodLayer.width = CW;
+        prodLayer.height = CH;
+        const pctx = prodLayer.getContext('2d');
+        const pw = W * scale, ph = H * scale;
+        for (let ty = 0; ty < CH; ty += ph) {
+          const rowFlip = Math.floor(ty / ph) % 2 === 1;
+          for (let tx = 0; tx < CW; tx += pw) {
+            const colFlip = Math.floor(tx / pw) % 2 === 1;
+            const sx = colFlip ? -1 : 1;
+            const sy = rowFlip ? -1 : 1;
+            pctx.save();
+            pctx.translate(tx + (sx < 0 ? pw : 0), ty + (sy < 0 ? ph : 0));
+            pctx.scale(sx, sy);
+            pctx.drawImage(productImg, 0, 0, pw, ph);
+            pctx.restore();
+          }
+        }
+
+        // --- Tiled reference layer (shared by all types) ---
+        const refLayer = document.createElement('canvas');
+        refLayer.width = CW;
+        refLayer.height = CH;
+        const rctx = refLayer.getContext('2d');
+        for (let ry = 0; ry < CH; ry += refH) {
+          const rowFlip = Math.floor(ry / refH) % 2 === 1;
+          for (let rx = 0; rx < CW; rx += refW) {
+            const colFlip = Math.floor(rx / refW) % 2 === 1;
+            const sx = colFlip ? -1 : 1;
+            const sy = rowFlip ? -1 : 1;
+            rctx.save();
+            rctx.translate(rx + (sx < 0 ? refW : 0), ry + (sy < 0 ? refH : 0));
+            rctx.scale(sx, sy);
+            rctx.drawImage(refImg, 0, 0, refW, refH);
+            rctx.restore();
+          }
+        }
+
+        // =============================================
+        // DEPTH TYPE: 立体浮雕渲染
+        // =============================================
+        if (currentType === 'depth') {
+          // --- Coordinate system: full product resolution (no 2x), like vector & bitmap ---
+          const R_CW = W;
+          const R_CH = H;
+
+          // --- Get crop rect (same as vector & bitmap) ---
+          const crop = getCropRect();
+          const hasCrop = crop && crop.iw > 0 && crop.ih > 0;
+
+          // --- Extract actual depth map content bounds (same content extraction as vector/bitmap) ---
+          const tmpCanvas = document.createElement('canvas');
+          tmpCanvas.width = drawW;
+          tmpCanvas.height = drawH;
+          const tmpCtx = tmpCanvas.getContext('2d');
+          tmpCtx.drawImage(drawingImg, 0, 0);
+          const tmpData = tmpCtx.getImageData(0, 0, drawW, drawH).data;
+          let sX1 = drawW, sY1 = drawH, sX2 = 0, sY2 = 0;
+          for (let y = 0; y < drawH; y++) {
+            for (let x = 0; x < drawW; x++) {
+              if (tmpData[(y * drawW + x) * 4 + 3] > 10) {
+                if (x < sX1) sX1 = x;
+                if (y < sY1) sY1 = y;
+                if (x > sX2) sX2 = x;
+                if (y > sY2) sY2 = y;
+              }
+            }
+          }
+          const sW = sX2 - sX1;
+          const sH = sY2 - sY1;
+          console.log('[DEBUG] DEPTH crop=' + JSON.stringify(crop) + ' | sW=' + sW + ' sH=' + sH);
+
+          // --- Build cropped depth map ---
+          const contentData = tmpCtx.getImageData(sX1, sY1, sW, sH);
+          const croppedDepth = document.createElement('canvas');
+          croppedDepth.width = sW;
+          croppedDepth.height = sH;
+          const cctx = croppedDepth.getContext('2d');
+          cctx.putImageData(contentData, 0, 0);
+
+          // --- Scale and position depth map (fit inside crop box, proportional, 1.15x zoom) ---
+          let dx, dy, drawW2, drawH2;
+          if (hasCrop) {
+            const ratioW = crop.iw / sW;
+            const ratioH = crop.ih / sH;
+            const fillScale = Math.min(ratioW, ratioH) * 1.15;
+            drawW2 = sW * fillScale;
+            drawH2 = sH * fillScale;
+          dx = crop.ix + (crop.iw - drawW2) / 2;
+          dy = crop.iy + (crop.ih - drawH2) / 2;
+          } else {
+            const drawScale = Math.min(R_CW / sW, R_CH / sH) * 1.15;
+            drawW2 = sW * drawScale;
+            drawH2 = sH * drawScale;
+            dx = (R_CW - drawW2) / 2;
+            dy = (R_CH - drawH2) / 2;
+          }
+          console.log('[DEBUG] DEPTH drawing at dx=' + dx.toFixed(1) + ' dy=' + dy.toFixed(1) + ' size=' + drawW2.toFixed(1) + 'x' + drawH2.toFixed(1));
+
+          // --- Product layer: single image, no tiling, at full resolution ---
+          const prodL = document.createElement('canvas');
+          prodL.width = R_CW;
+          prodL.height = R_CH;
+          const pctx2 = prodL.getContext('2d');
+          pctx2.drawImage(productImg, 0, 0, R_CW, R_CH);
+
+          // --- Reference layer: tiled only within drawing bounds (clipped) ---
+          const refL = document.createElement('canvas');
+          refL.width = R_CW;
+          refL.height = R_CH;
+          const rctxL = refL.getContext('2d');
+          rctxL.save();
+          rctxL.rect(dx, dy, drawW2, drawH2);
+          rctxL.clip();
+          for (let ry = dy; ry < dy + drawH2; ry += refH) {
+            for (let rx = dx; rx < dx + drawW2; rx += refW) {
+              rctxL.drawImage(refImg, rx, ry, refW, refH);
+            }
+          }
+          rctxL.restore();
+
+          // --- Build depth canvas: cropped depth drawn at (dx,dy) scaled to fill position ---
+          const depthCanvas = document.createElement('canvas');
+          depthCanvas.width = R_CW;
+          depthCanvas.height = R_CH;
+          const dctx = depthCanvas.getContext('2d');
+          dctx.drawImage(croppedDepth, dx, dy, drawW2, drawH2);
+          const depthW = R_CW;
+          const depthH = R_CH;
+          const depthRaw = dctx.getImageData(0, 0, depthW, depthH);
+          const dpx = depthRaw.data;
+          for (let i = 0; i < dpx.length; i += 4) {
+            if (dpx[i + 3] < 10) {
+              dpx[i] = 255; dpx[i+1] = 255; dpx[i+2] = 255;
+            }
+          }
+
+          // --- Compute grayscale from depth pixels only in drawing bounds ---
+          const gray = new Float32Array(depthW * depthH);
+          let dMin = 255, dMax = 0;
+          const x0 = Math.max(0, Math.round(dx));
+          const x1 = Math.min(depthW, Math.round(dx + drawW2));
+          const y0 = Math.max(0, Math.round(dy));
+          const y1 = Math.min(depthH, Math.round(dy + drawH2));
+          for (let py = y0; py < y1; py++) {
+            for (let px = x0; px < x1; px++) {
+              const idx = py * depthW + px;
+              const val = dpx[idx * 4];
+              gray[idx] = val;
+              if (val < dMin) dMin = val;
+              if (val > dMax) dMax = val;
+            }
+          }
+          const range = dMax - dMin || 1;
+          const stretched = new Float32Array(depthW * depthH);
+          // Initialize to 0 (transparent) outside drawing area; compute only inside
+          for (let i = 0; i < stretched.length; i++) { stretched[i] = 0; }
+          for (let py = y0; py < y1; py++) {
+            for (let px = x0; px < x1; px++) {
+              const idx = py * depthW + px;
+              const val = dpx[idx * 4];
+              stretched[idx] = (val - dMin) / range * 255;
+            }
+          }
+
+          // --- Sobel edge detection (only within drawing bounds) ---
+          const edgeMap = new Float32Array(depthW * depthH);
+          for (let py = Math.max(1, y0); py < Math.min(depthH - 1, y1); py++) {
+            for (let px = Math.max(1, x0); px < Math.min(depthW - 1, x1); px++) {
+              const gx = -stretched[(py-1)*depthW+(px-1)] + stretched[(py-1)*depthW+(px+1)]
+                        -2*stretched[py*depthW+(px-1)]      + 2*stretched[py*depthW+(px+1)]
+                        -stretched[(py+1)*depthW+(px-1)]   + stretched[(py+1)*depthW+(px+1)];
+              const gy = -stretched[(py-1)*depthW+(px-1)] - 2*stretched[(py-1)*depthW+px] - stretched[(py-1)*depthW+(px+1)]
+                        +stretched[(py+1)*depthW+(px-1)]  + 2*stretched[(py+1)*depthW+px]  + stretched[(py+1)*depthW+(px+1)];
+              edgeMap[py*depthW+px] = Math.sqrt(gx*gx + gy*gy);
+            }
+          }
+
+          // Normalise edge map
+          let eMax = 0;
+          for (let i = 0; i < edgeMap.length; i++) { if (edgeMap[i] > eMax) eMax = edgeMap[i]; }
+          const eRange = eMax || 1;
+          const edgeNorm = new Float32Array(edgeMap.length);
+          for (let i = 0; i < edgeMap.length; i++) edgeNorm[i] = edgeMap[i] / eRange;
+
+          // --- Normal map from gradient (only within drawing bounds) ---
+          const normMapX = new Float32Array(depthW * depthH);
+          const normMapY = new Float32Array(depthW * depthH);
+          for (let py = Math.max(1, y0); py < Math.min(depthH - 1, y1); py++) {
+            for (let px = Math.max(1, x0); px < Math.min(depthW - 1, x1); px++) {
+              const idx = py * depthW + px;
+              const gx = (stretched[(py-1)*depthW+(px+1)] - stretched[(py-1)*depthW+(px-1)]
+                       + 2*(stretched[py*depthW+(px+1)]     - stretched[py*depthW+(px-1)])
+                       + stretched[(py+1)*depthW+(px+1)]   - stretched[(py+1)*depthW+(px-1)]) / 8;
+              const gy = (stretched[(py+1)*depthW+(px-1)] - stretched[(py-1)*depthW+(px-1)]
+                       + 2*(stretched[(py+1)*depthW+px]   - stretched[(py-1)*depthW+px])
+                       + stretched[(py+1)*depthW+(px+1)] - stretched[(py-1)*depthW+(px+1)]) / 8;
+              normMapX[idx] = -gx;
+              normMapY[idx] = -gy;
+            }
+          }
+
+          // --- Blinn-Phong lighting ---
+          const depthScale = 1.5;
+          const lightAzimuth = Math.PI / 4;
+          const lightElev = Math.PI / 5;
+          const Lx = Math.cos(lightElev) * Math.sin(lightAzimuth);
+          const Ly = Math.cos(lightElev) * Math.cos(lightAzimuth);
+          const Lz = Math.sin(lightElev);
+          const ambient = 0.25;
+          const diffuse = 0.75;
+          const specPow = 48;
+          const specInt = 0.35;
+
+          const litCanvas = document.createElement('canvas');
+          litCanvas.width = depthW;
+          litCanvas.height = depthH;
+          const lctx = litCanvas.getContext('2d');
+          const litBuf = lctx.createImageData(depthW, depthH);
+          const lb = litBuf.data;
+          // Initialize all pixels to transparent (outside drawing area = transparent)
+          for (let i = 0; i < lb.length; i++) { lb[i] = 0; lb[i+1] = 0; lb[i+2] = 0; lb[i+3] = 0; }
+
+          for (let py = y0; py < y1; py++) {
+            for (let px = x0; px < x1; px++) {
+              const idx = py * depthW + px;
+              const i4 = idx * 4;
+
+              const edge = edgeNorm[idx];
+              let nx = normMapX[idx];
+              let ny = normMapY[idx];
+              const nz = depthScale;
+              const nLen = Math.sqrt(nx*nx + ny*ny + nz*nz);
+              nx /= nLen; ny /= nLen; const nz2 = nz / nLen;
+
+              const diff = Math.max(0, nx*Lx + ny*Ly + nz2*Lz) * diffuse;
+              const vx = 0, vy = 0, vz = 1;
+              const hx = Lx + vx, hy = Ly + vy, hz = Lz + vz;
+              const hLen = Math.sqrt(hx*hx + hy*hy + hz*hz);
+              const spec = Math.pow(Math.max(0, (nx*hx + ny*hy + nz2*hz) / hLen), specPow) * specInt;
+
+              const depthBright = 0.5 + 0.5 * (stretched[idx] / 255);
+              const edgeShadow = 1.0 - edge * 0.8;
+              const brightness = (ambient + diff * depthBright) * edgeShadow + spec;
+              const v = Math.min(255, Math.max(0, brightness * 255)) | 0;
+              lb[i4] = v; lb[i4+1] = v; lb[i4+2] = v; lb[i4+3] = 255;
+            }
+          }
+          lctx.putImageData(litBuf, 0, 0);
+
+          // --- Build engraved layer: litCanvas drawn directly (source-over, outside bounds stays white) ---
+          const engCanvas = document.createElement('canvas');
+          engCanvas.width = R_CW;
+          engCanvas.height = R_CH;
+          const ectx = engCanvas.getContext('2d');
+          ectx.drawImage(litCanvas, 0, 0);
+          const engData = ectx.getImageData(0, 0, R_CW, R_CH);
+          ectx.putImageData(engData, 0, 0);
+
+          // --- Build depth mask: cropped depth at (dx,dy) ---
+          const dmCanvas = document.createElement('canvas');
+          dmCanvas.width = R_CW;
+          dmCanvas.height = R_CH;
+          const dmCtx = dmCanvas.getContext('2d');
+          // Fill with white first (outside drawing bounds = white = transparent in mask)
+          dmCtx.fillStyle = '#ffffff';
+          dmCtx.fillRect(0, 0, R_CW, R_CH);
+          dmCtx.drawImage(croppedDepth, dx, dy, drawW2, drawH2);
+          const dmData = dmCtx.getImageData(0, 0, R_CW, R_CH);
+          const dmPx = dmData.data;
+          for (let i = 0; i < dmPx.length; i += 4) {
+            const a = 255 - dmPx[i];
+            dmPx[i] = 0; dmPx[i+1] = 0; dmPx[i+2] = 0; dmPx[i+3] = a;
+          }
+          dmCtx.putImageData(dmData, 0, 0);
+
+          // --- Composite: product → engraved → depthMask (with product mask clip) ---
+          const depthComposite = document.createElement('canvas');
+          depthComposite.width = R_CW;
+          depthComposite.height = R_CH;
+          const rctx2 = depthComposite.getContext('2d');
+          if (productMaskCanvas && productMaskCanvas.width === R_CW && productMaskCanvas.height === R_CH) {
+            var depthTmp = document.createElement('canvas');
+            depthTmp.width = R_CW; depthTmp.height = R_CH;
+            var depthTmpCtx = depthTmp.getContext('2d');
+            depthTmpCtx.drawImage(prodL, 0, 0);
+            depthTmpCtx.drawImage(engCanvas, 0, 0);
+            var depthMasked = document.createElement('canvas');
+            depthMasked.width = R_CW; depthMasked.height = R_CH;
+            var depthMaskedCtx = depthMasked.getContext('2d');
+            depthMaskedCtx.drawImage(depthTmp, 0, 0);
+            depthMaskedCtx.globalCompositeOperation = 'destination-in';
+            depthMaskedCtx.drawImage(productMaskCanvas, 0, 0);
+            rctx2.drawImage(depthMasked, 0, 0);
+          } else {
+            rctx2.drawImage(prodL, 0, 0);
+            rctx2.drawImage(engCanvas, 0, 0);
+          }
+          rctx2.drawImage(dmCanvas, 0, 0);
+
+          const resultUrl2 = depthComposite.toDataURL('image/png');
+          previewBox.innerHTML = `<img src="${resultUrl2}" style="width:100%;height:100%;object-fit:contain;border-radius:6px;cursor:pointer;filter:brightness(1.3) contrast(0.8);" onclick="openLightbox(this.src)" />`;
+          return;
+        }
+        // =============================================
+        // BITMAP TYPE: pixel-wise blend with embossed lighting on dark areas
+        // Dark gray areas → engraved/carved look (Blinn-Phong shading from grayscale gradient)
+        // Light areas     → product shows through, flat
+        // =============================================
+        if (currentType === 'jarvis') {
+          // --- Coordinate system: full product resolution (no 2x), like vector ---
+          const B_CW = W;
+          const B_CH = H;
+
+          // --- Get crop rect (same as vector) ---
+          const crop = getCropRect();
+          const hasCrop = crop && crop.iw > 0 && crop.ih > 0;
+
+          // --- Extract actual SVG content bounds (same as vector) ---
+          const tmpCanvas = document.createElement('canvas');
+          tmpCanvas.width = drawW;
+          tmpCanvas.height = drawH;
+          const tmpCtx = tmpCanvas.getContext('2d');
+          tmpCtx.drawImage(drawingImg, 0, 0);
+          const tmpData = tmpCtx.getImageData(0, 0, drawW, drawH).data;
+          let sX1 = drawW, sY1 = drawH, sX2 = 0, sY2 = 0;
+          for (let y = 0; y < drawH; y++) {
+            for (let x = 0; x < drawW; x++) {
+              if (tmpData[(y * drawW + x) * 4 + 3] > 10) {
+                if (x < sX1) sX1 = x;
+                if (y < sY1) sY1 = y;
+                if (x > sX2) sX2 = x;
+                if (y > sY2) sY2 = y;
+              }
+            }
+          }
+          const sW = sX2 - sX1;
+          const sH = sY2 - sY1;
+
+          // --- Build cropped drawing (content-only) ---
+          const contentData = tmpCtx.getImageData(sX1, sY1, sW, sH);
+          const croppedDrawing = document.createElement('canvas');
+          croppedDrawing.width = sW;
+          croppedDrawing.height = sH;
+          const cctx = croppedDrawing.getContext('2d');
+          cctx.putImageData(contentData, 0, 0);
+
+          // --- Scale and position drawing (fit inside crop box, centered) ---
+          let dx, dy, drawW2, drawH2;
+          if (hasCrop) {
+            const ratioW = crop.iw / sW;
+            const ratioH = crop.ih / sH;
+            const fillScale = Math.min(ratioW, ratioH) * 1.15;
+            drawW2 = sW * fillScale;
+            drawH2 = sH * fillScale;
+          dx = crop.ix + (crop.iw - drawW2) / 2;
+          dy = crop.iy + (crop.ih - drawH2) / 2;
+          } else {
+            const drawScale = Math.min(B_CW / sW, B_CH / sH);
+            drawW2 = sW * drawScale;
+            drawH2 = sH * drawScale;
+            dx = (B_CW - drawW2) / 2;
+            dy = (B_CH - drawH2) / 2;
+          }
+          console.log('[DEBUG] BITMAP crop=' + JSON.stringify(crop) + ' | drawing at dx=' + dx.toFixed(1) + ' dy=' + dy.toFixed(1) + ' size=' + drawW2.toFixed(1) + 'x' + drawH2.toFixed(1));
+
+          // --- Product layer: single image, no tiling, at full resolution ---
+          const prodLayer = document.createElement('canvas');
+          prodLayer.width = B_CW;
+          prodLayer.height = B_CH;
+          const pCtx = prodLayer.getContext('2d');
+          pCtx.drawImage(productImg, 0, 0, B_CW, B_CH);
+
+          // Reference layer: scale up 4x then draw into clip (minimizes scale artifacts)
+          const refLayer = document.createElement('canvas');
+          refLayer.width = B_CW;
+          refLayer.height = B_CH;
+          const rCtx = refLayer.getContext('2d');
+          rCtx.save();
+          rCtx.rect(dx, dy, drawW2, drawH2);
+          rCtx.clip();
+          const refScaledW = drawW2 * 4;
+          const refScaledH = drawH2 * 4;
+          const refScaled = document.createElement('canvas');
+          refScaled.width = refScaledW;
+          refScaled.height = refScaledH;
+          const rsCtx = refScaled.getContext('2d');
+          rsCtx.imageSmoothingEnabled = false;
+          rsCtx.drawImage(refImg, 0, 0, refScaledW, refScaledH);
+          rCtx.imageSmoothingEnabled = false;
+          rCtx.drawImage(refScaled, dx, dy, drawW2, drawH2);
+          rCtx.restore();
+          const refData = rCtx.getImageData(0, 0, B_CW, B_CH);
+          const refPx = refData.data;
+
+          // --- Drawing layer: cropped drawing scaled to fit position ---
+          const drawLayer = document.createElement('canvas');
+          drawLayer.width = B_CW;
+          drawLayer.height = B_CH;
+          const dCtx = drawLayer.getContext('2d');
+          dCtx.drawImage(croppedDrawing, dx, dy, drawW2, drawH2);
+          const drawData = dCtx.getImageData(0, 0, B_CW, B_CH);
+          const drPx = drawData.data;
+          var _bmCropData = croppedDrawing.getContext('2d').getImageData(0, 0, sW, sH).data;
+          var _bmOpq = 0;
+          for (var _bi = 3; _bi < _bmCropData.length; _bi += 4) { if (_bmCropData[_bi] >= 10) _bmOpq++; }
+          var _bmTransRatio = 1 - _bmOpq / (sW * sH);
+          var _bmIsTransBg = _bmTransRatio > 0.5;
+          console.log('[BITMAP] sW=' + sW + ' sH=' + sH + ' opaque=' + _bmOpq + ' transRatio=' + _bmTransRatio.toFixed(2) + ' isTransBg=' + _bmIsTransBg);
+          for (var _bi = 0; _bi < drPx.length; _bi += 4) {
+            if (drPx[_bi + 3] < 10) {
+              drPx[_bi] = 255; drPx[_bi+1] = 255; drPx[_bi+2] = 255;
+            } else if (_bmIsTransBg) {
+              drPx[_bi] = 0; drPx[_bi+1] = 0; drPx[_bi+2] = 0;
+            } else {
+              var _bmLum = 0.299 * drPx[_bi] + 0.587 * drPx[_bi+1] + 0.114 * drPx[_bi+2];
+              var _bmG = Math.round(_bmLum);
+              drPx[_bi] = _bmG; drPx[_bi+1] = _bmG; drPx[_bi+2] = _bmG;
+            }
+          }
+
+          // --- Sobel gradient maps (only within drawing bounds) ---
+          const gx = new Float32Array(B_CW * B_CH);
+          const gy = new Float32Array(B_CW * B_CH);
+          const x0 = Math.max(1, Math.round(dx));
+          const x1 = Math.min(B_CW - 1, Math.round(dx + drawW2));
+          const y0 = Math.max(1, Math.round(dy));
+          const y1 = Math.min(B_CH - 1, Math.round(dy + drawH2));
+          for (let y = y0; y < y1; y++) {
+            for (let x = x0; x < x1; x++) {
+              const idx = y * B_CW + x;
+              const gxx =
+                -drPx[((y-1)*B_CW+(x-1))*4] + drPx[((y-1)*B_CW+(x+1))*4]
+                -2*drPx[(y*B_CW+(x-1))*4]    + 2*drPx[(y*B_CW+(x+1))*4]
+                -drPx[((y+1)*B_CW+(x-1))*4] + drPx[((y+1)*B_CW+(x+1))*4];
+              const gyy =
+                -drPx[((y-1)*B_CW+(x-1))*4] - 2*drPx[((y-1)*B_CW+x)*4] - drPx[((y-1)*B_CW+(x+1))*4]
+                +drPx[((y+1)*B_CW+(x-1))*4] + 2*drPx[((y+1)*B_CW+x)*4] + drPx[((y+1)*B_CW+(x+1))*4];
+              gx[idx] = gxx;
+              gy[idx] = gyy;
+            }
+          }
+
+          // --- Blinn-Phong lighting params ---
+          const Lx = 0.5, Ly = 0.5, Lz = 0.707;
+          const ambient = 0.3;
+          const diffuse = 0.7;
+          const specPow = 32;
+          const specInt = 0.15;
+          const brightnessMap = { normal: 3.6, shallow: 2.16, deep: 4.32 };
+          const bk = brightnessMap[currentEffectType] || 1;
+
+          const outCanvas = document.createElement('canvas');
+          outCanvas.width = B_CW;
+          outCanvas.height = B_CH;
+          const oCtx = outCanvas.getContext('2d');
+          const outData = oCtx.createImageData(B_CW, B_CH);
+          const outPx = outData.data;
+
+          const prodData = pCtx.getImageData(0, 0, B_CW, B_CH);
+          const prodPx = prodData.data;
+
+          // --- Highlight stroke on product (same approach as vector, max +50) ---
+          var _bmMaxG = 1;
+          for (var _bi2 = 0; _bi2 < gx.length; _bi2++) {
+            var _bmG = Math.abs(gx[_bi2]) + Math.abs(gy[_bi2]);
+            if (_bmG > _bmMaxG) _bmMaxG = _bmG;
+          }
+          var _bmHLx = 0.5, _bmHLy = 0.5, _bmHLz = 0.707;
+          var _bmx0 = Math.max(2, Math.round(dx));
+          var _bmx1 = Math.min(B_CW - 2, Math.round(dx + drawW2));
+          var _bmy0 = Math.max(2, Math.round(dy));
+          var _bmy1 = Math.min(B_CH - 2, Math.round(dy + drawH2));
+          for (var _bmy = _bmy0; _bmy < _bmy1; _bmy++) {
+            for (var _bmx = _bmx0; _bmx < _bmx1; _bmx++) {
+              var _bmi = _bmy * B_CW + _bmx;
+              var _bmi4 = _bmi * 4;
+              if (drPx[_bmi4 + 3] < 10) continue;
+              var _bmDv = drPx[_bmi4] / 255;
+              var _bmgx = gx[_bmi] / _bmMaxG;
+              var _bmgy = gy[_bmi] / _bmMaxG;
+              var _bmEm = Math.min(1, Math.sqrt(_bmgx * _bmgx + _bmgy * _bmgy) * 2);
+              if (_bmEm < 0.05) continue;
+              var _bmnz = 1.0;
+              var _bmnLen = Math.sqrt(_bmgx * _bmgx + _bmgy * _bmgy + _bmnz * _bmnz);
+              var _bmnnx = _bmgx / _bmnLen, _bmnny = _bmgy / _bmnLen, _bmnnz = _bmnz / _bmnLen;
+              var _bmdotL = Math.max(0, -(_bmnnx * _bmHLx + _bmnny * _bmHLy + _bmnnz * _bmHLz));
+              if (_bmdotL < 0.05) continue;
+              var _bmbv = Math.pow(_bmdotL, 1.5) * _bmEm * _bmDv;
+              if (_bmbv > 0.02) {
+                prodPx[_bmi4] = Math.min(255, prodPx[_bmi4] + _bmbv * 50);
+                prodPx[_bmi4 + 1] = Math.min(255, prodPx[_bmi4 + 1] + _bmbv * 50);
+                prodPx[_bmi4 + 2] = Math.min(255, prodPx[_bmi4 + 2] + _bmbv * 50);
+              }
+            }
+          }
+
+          for (let y = 0; y < B_CH; y++) {
+            for (let x = 0; x < B_CW; x++) {
+              const idx = y * B_CW + x;
+              const i4 = idx * 4;
+
+              // Outside product mask → keep original product
+              if (productMaskCanvas && productMaskCanvas.width === B_CW && productMaskCanvas.height === B_CH) {
+                var _bmI4 = (y * productMaskCanvas.width + x) * 4;
+                if (!window.__bmMaskPx) {
+                  window.__bmMaskPx = productMaskCanvas.getContext('2d').getImageData(0, 0, productMaskCanvas.width, productMaskCanvas.height).data;
+                }
+                if (window.__bmMaskPx[_bmI4 + 3] < 10) {
+                  outPx[i4] = prodPx[i4]; outPx[i4+1] = prodPx[i4+1]; outPx[i4+2] = prodPx[i4+2]; outPx[i4+3] = 255;
+                  continue;
+                }
+              }
+
+              // Outside drawing bounds → keep original product
+              if (x < dx || x >= dx + drawW2 || y < dy || y >= dy + drawH2) {
+                outPx[i4]   = prodPx[i4];
+                outPx[i4+1] = prodPx[i4+1];
+                outPx[i4+2] = prodPx[i4+2];
+                outPx[i4+3] = 255;
+                continue;
+              }
+
+              const darkVal = drPx[i4] / 255;
+              const carveStrength = (1 - darkVal);
+
+              let shadings = 1;
+              const isEdge = darkVal > 0.1 && darkVal < 0.85;
+              if (isEdge) {
+                const nx = gx[idx];
+                const ny = gy[idx];
+                const nz = 8;
+                const nLen = Math.sqrt(nx*nx + ny*ny + nz*nz);
+                const nnx = nx/nLen, nny = ny/nLen, nnz = nz/nLen;
+                const diff = Math.max(0, nnx*Lx + nny*Ly + nnz*Lz) * diffuse;
+                const vx = 0, vy = 0, vz = 1;
+                const hx = Lx+vx, hy = Ly+vy, hz = Lz+vz;
+                const hLen = Math.sqrt(hx*hx+hy*hy+hz*hz);
+                const spec = Math.pow(Math.max(0,(nnx*hx+nny*hy+nnz*hz)/hLen), specPow) * specInt;
+                const carvedShade = ambient + diff + spec;
+                const raisedShade = 1.0;
+                const edgeFactor = 1 - Math.abs(darkVal - 0.5) * 2;
+                shadings = raisedShade + (carvedShade - raisedShade) * edgeFactor * 0.4;
+                shadings = Math.max(0.6, Math.min(1.2, shadings));
+              } else if (carveStrength > 0.85) {
+                shadings = 0.92;
+              }
+
+              const prodContrib = 0.1 + 0.9 * darkVal;
+              const engContrib = 0.9 * (1 - darkVal);
+              const total = engContrib + prodContrib;
+
+              const pr = prodPx[i4];
+              const pg = prodPx[i4+1];
+              const pb = prodPx[i4+2];
+              const rr = refPx[i4];
+              const rg = refPx[i4+1];
+              const rb = refPx[i4+2];
+
+              const engR = Math.min(255, rr * shadings * 1.05);
+              const engG = Math.min(255, rg * shadings * 1.05);
+              const engB = Math.min(255, rb * shadings * 1.05);
+
+              outPx[i4]   = Math.round((pr * prodContrib + engR * engContrib) / (total || 1));
+              outPx[i4+1] = Math.round((pg * prodContrib + engG * engContrib) / (total || 1));
+              outPx[i4+2] = Math.round((pb * prodContrib + engB * engContrib) / (total || 1));
+              outPx[i4+3] = 255;
+            }
+          }
+
+          // --- Inner edge darkening (distance field from drawing boundary, max 6%) ---
+          var _bmDarkF = 0.06;
+          var _bmMaxDist = 2;
+          var _bmDist = new Float32Array(B_CW * B_CH);
+          for (var _bdy = _bmy0; _bdy < _bmy1; _bdy++) {
+            for (var _bdx = _bmx0; _bdx < _bmx1; _bdx++) {
+              var _bdi = _bdy * B_CW + _bdx;
+              if (drPx[_bdi * 4 + 3] < 10) { _bmDist[_bdi] = 999; continue; }
+              var _bmNear = false;
+              for (var _bdny = -2; _bdny <= 2 && !_bmNear; _bdny++) {
+                for (var _bdnx = -2; _bdnx <= 2 && !_bmNear; _bdnx++) {
+                  if (_bdnx === 0 && _bdny === 0) continue;
+                  var _bdnx2 = _bdx + _bdnx, _bdny2 = _bdy + _bdny;
+                  if (_bdnx2 < 0 || _bdnx2 >= B_CW || _bdny2 < 0 || _bdny2 >= B_CH) { _bmNear = true; continue; }
+                  if (drPx[(_bdny2 * B_CW + _bdnx2) * 4 + 3] < 10) _bmNear = true;
+                }
+              }
+              if (!_bmNear) { _bmDist[_bdi] = 999; continue; }
+              var _bmMinD = 999;
+              for (var _bdsy = -_bmMaxDist; _bdsy <= _bmMaxDist; _bdsy++) {
+                for (var _bdsx = -_bmMaxDist; _bdsx <= _bmMaxDist; _bdsx++) {
+                  if (_bdsx === 0 && _bdsy === 0) continue;
+                  var _bdsx2 = _bdx + _bdsx, _bdsy2 = _bdy + _bdsy;
+                  if (_bdsx2 < 0 || _bdsx2 >= B_CW || _bdsy2 < 0 || _bdsy2 >= B_CH) continue;
+                  if (drPx[(_bdsy2 * B_CW + _bdsx2) * 4 + 3] < 10) {
+                    var _bdd = Math.sqrt(_bdsx * _bdsx + _bdsy * _bdsy);
+                    if (_bdd < _bmMinD) _bmMinD = _bdd;
+                  }
+                }
+              }
+              _bmDist[_bdi] = _bmMinD;
+            }
+          }
+          for (var _bdy2 = _bmy0; _bdy2 < _bmy1; _bdy2++) {
+            for (var _bdx2 = _bmx0; _bdx2 < _bmx1; _bdx2++) {
+              var _bdi2 = _bdy2 * B_CW + _bdx2;
+              if (_bmDist[_bdi2] >= _bmMaxDist) continue;
+              var _bdt = 1.0 - _bmDist[_bdi2] / _bmMaxDist;
+              var _bdf = 1.0 - _bdt * _bdt * _bmDarkF;
+              var _bdi6 = _bdi2 * 4;
+              outPx[_bdi6] = Math.round(outPx[_bdi6] * _bdf);
+              outPx[_bdi6 + 1] = Math.round(outPx[_bdi6 + 1] * _bdf);
+              outPx[_bdi6 + 2] = Math.round(outPx[_bdi6 + 2] * _bdf);
+            }
+          }
+
+          oCtx.putImageData(outData, 0, 0);
+
+          const resultUrl = outCanvas.toDataURL('image/png');
+          previewBox.innerHTML = `<img src="${resultUrl}" style="width:100%;height:100%;object-fit:contain;border-radius:6px;cursor:pointer;" onclick="openLightbox(this.src)" />`;
+          return;
+        }
+
+        // =============================================
+        if (currentType === 'vector') {
+                // Use crop rect to determine where the engraving zone is on the product
+        const crop = getCropRect();
+        const hasCrop = crop && crop.iw > 0 && crop.ih > 0;
+
+        // Full product canvas at original resolution
+        const V_CW = W;
+        const V_CH = H;
+
+        // Drawing scaled to fit exactly inside the crop box (or centered if no crop)
+        let dx, dy, drawW2, drawH2;
+        if (hasCrop) {
+          // Scale drawing to fit entirely inside the crop box (aspect-ratio-preserving fit, no cropping)
+          const cropScale = Math.min(crop.iw / drawW, crop.ih / drawH);
+          drawW2 = drawW * cropScale;
+          drawH2 = drawH * cropScale;
+          // Center drawing inside the crop box
+          dx = crop.ix + (crop.iw - drawW2) / 2;
+          dy = crop.iy + (crop.ih - drawH2) / 2;
+        } else {
+          // No crop: center drawing in full canvas (backward compat)
+          const drawScale = Math.min(V_CW / drawW, V_CH / drawH);
+          drawW2 = drawW * drawScale;
+          drawH2 = drawH * drawScale;
+          dx = (V_CW - drawW2) / 2;
+          dy = (V_CH - drawH2) / 2;
+        }
+
+        // Product layer at full original size (untouched outside drawing area)
+        const prodLayer = document.createElement('canvas');
+        prodLayer.width = V_CW;
+        prodLayer.height = V_CH;
+        const pctx = prodLayer.getContext('2d');
+        pctx.drawImage(productImg, 0, 0, V_CW, V_CH);
+
+        // Drawing layer centered in canvas, fit-scaled
+        const drawLayer = document.createElement('canvas');
+        drawLayer.width = V_CW;
+        drawLayer.height = V_CH;
+        const dctx = drawLayer.getContext('2d');
+        // --- Temp canvas: extract actual SVG content (crop out transparent padding) ---
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = drawW;
+        tmpCanvas.height = drawH;
+        const tmpCtx = tmpCanvas.getContext('2d');
+        tmpCtx.drawImage(drawingImg, 0, 0);  // draw full SVG at native resolution
+
+        // Scan for actual non-transparent content bounds in SVG pixel space
+        const tmpData = tmpCtx.getImageData(0, 0, drawW, drawH).data;
+        let sX1 = drawW, sY1 = drawH, sX2 = 0, sY2 = 0;
+        for (let y = 0; y < drawH; y++) {
+          for (let x = 0; x < drawW; x++) {
+            if (tmpData[(y * drawW + x) * 4 + 3] > 10) {
+              if (x < sX1) sX1 = x;
+              if (y < sY1) sY1 = y;
+              if (x > sX2) sX2 = x;
+              if (y > sY2) sY2 = y;
+            }
+          }
+        }
+        const sW = sX2 - sX1;
+        const sH = sY2 - sY1;
+        console.log('[DEBUG] SVG content pixel bounds: sx=' + sX1 + ', sy=' + sY1 + ', sw=' + sW + ', sh=' + sH);
+
+        // Extract content as ImageData from temp canvas
+        const contentData = tmpCtx.getImageData(sX1, sY1, sW, sH);
+
+        // Build a cropped drawing image from the content region
+        const croppedDrawing = document.createElement('canvas');
+        croppedDrawing.width = sW;
+        croppedDrawing.height = sH;
+        const cctx = croppedDrawing.getContext('2d');
+        cctx.putImageData(contentData, 0, 0);
+
+        // Drawing layer: clear first, then draw cropped content scaled to fit crop box
+        dctx.clearRect(0, 0, V_CW, V_CH);
+        if (hasCrop && sW > 0 && sH > 0) {
+          // Scale content so it fills the crop box (proportional fit — one dimension touches edges, other has margin)
+          const ratioW = crop.iw / sW;
+          const ratioH = crop.ih / sH;
+          const fillScale = Math.min(ratioW, ratioH); // smaller ratio = limiting side
+          const fillW = sW * fillScale;
+          const fillH = sH * fillScale;
+          // Content center in croppedDrawing pixel space (accounting for sX1/sY1 offset in original SVG)
+          const contentCx = sX1 + sW / 2;
+          const contentCy = sY1 + sH / 2;
+          // Crop box center in product pixel space
+          const cropCx = crop.ix + crop.iw / 2;
+          const cropCy = crop.iy + crop.ih / 2;
+          // Map content center → crop center
+          dx = cropCx - contentCx * fillScale;
+          // Subtle visual offset: content appears "偏上" → shift pattern slightly down
+          // Adjust by 4% of crop height downward
+          const visualBias = 0;
+          dy = cropCy - contentCy * fillScale + visualBias;
+          console.log('[DEBUG] visualBias=' + visualBias.toFixed(1) + ' (downward shift for 偏上)');
+          dctx.drawImage(croppedDrawing, dx, dy, fillW, fillH);
+          drawW2 = fillW;
+          drawH2 = fillH;
+          console.log('[DEBUG] Content-center approach: contentCx=' + contentCx + ', contentCy=' + contentCy + ' | cropCx=' + cropCx + ', cropCy=' + cropCy + ' | dx=' + dx.toFixed(1) + ', dy=' + dy.toFixed(1));
+          console.log('[DEBUG] Drawing right=' + (dx + fillW).toFixed(1) + ' (crop right=' + (crop.ix + crop.iw) + ') | Drawing bottom=' + (dy + fillH).toFixed(1) + ' (crop bottom=' + (crop.iy + crop.ih) + ')');
+        } else {
+          dctx.drawImage(croppedDrawing, dx, dy, drawW2, drawH2);
+        }
+        const drawData = dctx.getImageData(0, 0, V_CW, V_CH);
+        const drPx = drawData.data;
+
+        // Reference texture: scale up 4x then draw into clip (minimizes scale artifacts)
+        const refMasked = document.createElement('canvas');
+        refMasked.width = V_CW;
+        refMasked.height = V_CH;
+        const mctx = refMasked.getContext('2d');
+        mctx.save();
+        mctx.beginPath();
+        mctx.rect(dx, dy, drawW2, drawH2);
+        mctx.clip();
+        const refScaledW = drawW2 * 4;
+        const refScaledH = drawH2 * 4;
+        const refScaled = document.createElement('canvas');
+        refScaled.width = refScaledW;
+        refScaled.height = refScaledH;
+        const rsCtx = refScaled.getContext('2d');
+        rsCtx.imageSmoothingEnabled = false;
+        rsCtx.drawImage(refImg, 0, 0, refScaledW, refScaledH);
+        mctx.imageSmoothingEnabled = false;
+        mctx.drawImage(refScaled, dx, dy, drawW2, drawH2);
+        mctx.globalCompositeOperation = 'destination-in';
+        mctx.drawImage(drawLayer, 0, 0);
+        mctx.restore();
+
+        const bvMap = { normal: 0.95, shallow: 0.95, deep: 0.95 };
+        const bk = bvMap[currentEffectType] || 1;
+
+        // Sobel gradient from drawing
+        const gxArr = new Float32Array(V_CW * V_CH);
+        const gyArr = new Float32Array(V_CW * V_CH);
+        for (let y = 1; y < V_CH - 1; y++) {
+          for (let x = 1; x < V_CW - 1; x++) {
+            const idx = y * V_CW + x;
+            gxArr[idx] =
+              -drPx[((y-1)*V_CW+(x-1))*4] + drPx[((y-1)*V_CW+(x+1))*4]
+              -2*drPx[(y*V_CW+(x-1))*4]    + 2*drPx[(y*V_CW+(x+1))*4]
+              -drPx[((y+1)*V_CW+(x-1))*4] + drPx[((y+1)*V_CW+(x+1))*4];
+            gyArr[idx] =
+              -drPx[((y-1)*V_CW+(x-1))*4] - 2*drPx[((y-1)*V_CW+x)*4] - drPx[((y-1)*V_CW+(x+1))*4]
+              +drPx[((y+1)*V_CW+(x-1))*4] + 2*drPx[((y+1)*V_CW+x)*4] + drPx[((y+1)*V_CW+(x+1))*4];
+          }
+        }
+
+        let maxG = 1;
+        for (let i = 0; i < gxArr.length; i++) {
+          const g = Math.abs(gxArr[i]) + Math.abs(gyArr[i]);
+          if (g > maxG) maxG = g;
+        }
+
+        const Lx = -0.707, Ly = -0.707, Lz = 0;
+
+        // Product canvas: full product + highlight on drawing edges
+        const prodCanvas = document.createElement('canvas');
+        prodCanvas.width = V_CW;
+        prodCanvas.height = V_CH;
+        const pCtx = prodCanvas.getContext('2d');
+        pCtx.drawImage(prodLayer, 0, 0);
+        const prodImgData = pCtx.getImageData(0, 0, V_CW, V_CH);
+        const prodPx = prodImgData.data;
+
+        for (let y = 2; y < V_CH - 2; y++) {
+          for (let x = 2; x < V_CW - 2; x++) {
+            // Use bounding-box boundary instead of alpha check
+            // so hollow/ring drawings still get carving inside the crop box
+            if (x < dx || x >= dx + drawW2 || y < dy || y >= dy + drawH2) continue;
+            const i4 = (y * V_CW + x) * 4;
+            const darkVal = drPx[i4] / 255;
+            const gx = gxArr[y*V_CW+x] / maxG;
+            const gy = gyArr[y*V_CW+x] / maxG;
+            const edgeMag = Math.min(1, Math.sqrt(gx*gx + gy*gy) * 2);
+            if (edgeMag < 0.05) continue;
+            const nz = 1.0;
+            const nLen = Math.sqrt(gx*gx + gy*gy + nz*nz);
+            const nnx = gx/nLen, nny = gy/nLen, nnz = nz/nLen;
+            const dotL = Math.max(0, -(nnx*Lx + nny*Ly + nnz*Lz));
+            if (dotL < 0.05) continue;
+            const brightVal = Math.pow(dotL, 1.5) * edgeMag * darkVal;
+            if (brightVal > 0.02) {
+              prodPx[i4]   = Math.min(255, prodPx[i4]   + brightVal * 50);
+              prodPx[i4+1] = Math.min(255, prodPx[i4+1] + brightVal * 50);
+              prodPx[i4+2] = Math.min(255, prodPx[i4+2] + brightVal * 50);
+            }
+          }
+        }
+        pCtx.putImageData(prodImgData, 0, 0);
+
+        // Engraving canvas: ref texture shaped to drawing, with shadow on black edges
+        const engCanvas = document.createElement('canvas');
+        engCanvas.width = V_CW;
+        engCanvas.height = V_CH;
+        const engCtx = engCanvas.getContext('2d');
+        engCtx.filter = `brightness(${bk})`;
+        engCtx.drawImage(refMasked, 0, 0);
+        engCtx.filter = 'none';
+
+        // Composite: per-pixel blend (product 10% + engraving 90% at black, 100% product at transparent)
+        const canvas = document.createElement('canvas');
+        canvas.width = V_CW;
+        canvas.height = V_CH;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(prodCanvas, 0, 0);
+        const blendData = ctx.getImageData(0, 0, V_CW, V_CH);
+        const blendPx = blendData.data;
+        const engBlendData = engCtx.getImageData(0, 0, V_CW, V_CH);
+        const engBlendPx = engBlendData.data;
+        var _vecMaskPx2 = (productMaskCanvas && productMaskCanvas.width === V_CW && productMaskCanvas.height === V_CH)
+          ? productMaskCanvas.getContext('2d').getImageData(0, 0, V_CW, V_CH).data : null;
+        var _bx0 = Math.max(0, Math.floor(dx));
+        var _bx1 = Math.min(V_CW, Math.ceil(dx + drawW2));
+        var _by0 = Math.max(0, Math.floor(dy));
+        var _by1 = Math.min(V_CH, Math.ceil(dy + drawH2));
+        for (var _by = _by0; _by < _by1; _by++) {
+          for (var _bx = _bx0; _bx < _bx1; _bx++) {
+            var _bi = (_by * V_CW + _bx) * 4;
+            if (_vecMaskPx2 && _vecMaskPx2[_bi + 3] < 10) continue;
+            if (engBlendPx[_bi + 3] < 10) continue;
+            var _bAlpha = drPx[_bi + 3] / 255;
+            var _bDark = (drPx[_bi] * 0.299 + drPx[_bi+1] * 0.587 + drPx[_bi+2] * 0.114) / 255;
+            var _bEngW = (1 - _bDark) * _bAlpha * 0.9;
+            var _bProdW = 1 - _bEngW;
+            blendPx[_bi]   = Math.round(blendPx[_bi]   * _bProdW + engBlendPx[_bi]   * _bEngW);
+            blendPx[_bi+1] = Math.round(blendPx[_bi+1] * _bProdW + engBlendPx[_bi+1] * _bEngW);
+            blendPx[_bi+2] = Math.round(blendPx[_bi+2] * _bProdW + engBlendPx[_bi+2] * _bEngW);
+          }
+        }
+        ctx.putImageData(blendData, 0, 0);
+
+        // Scan the center of the drawing area for actual pixel content
+        const cropCx2 = crop.ix + crop.iw / 2;
+        const cropCy2 = crop.iy + crop.ih / 2;
+        const scanR = 20; // check a 20px radius around crop center
+        let foundContent = false;
+        for (let sy = Math.max(0, Math.round(cropCy2) - scanR); sy < Math.min(V_CH, Math.round(cropCy2) + scanR); sy++) {
+          for (let sx = Math.max(0, Math.round(cropCx2) - scanR); sx < Math.min(V_CW, Math.round(cropCx2) + scanR); sx++) {
+            if (drPx[(sy * V_CW + sx) * 4 + 3] > 10) { foundContent = true; break; }
+          }
+          if (foundContent) break;
+        }
+        console.log('[DEBUG] Crop center area has drawing content: ' + foundContent + ' at cropCenter=(' + cropCx2.toFixed(1) + ',' + cropCy2.toFixed(1) + ')');
+        console.log('[DEBUG] Drawing bounds check: dx=' + dx.toFixed(1) + ', dy=' + dy.toFixed(1) + ', dw2=' + drawW2.toFixed(1) + ', dh2=' + drawH2.toFixed(1) + ' | crop ix+iw=' + (crop.ix + crop.iw) + ', iy+ih=' + (crop.iy + crop.ih));
+        // Also verify what product canvas looks like at crop center
+        const prodImgData2 = pCtx.getImageData(0, 0, V_CW, V_CH);
+        const prodPx2 = prodImgData2.data;
+        const prodCenterI4 = (Math.round(cropCy2) * V_CW + Math.round(cropCx2)) * 4;
+        console.log('[DEBUG] Product center pixel: r=' + prodPx2[prodCenterI4] + ' g=' + prodPx2[prodCenterI4+1] + ' b=' + prodPx2[prodCenterI4+2] + ' a=' + prodPx2[prodCenterI4+3]);
+        // Verify prodLayer was drawn at (0,0) with no offset
+        const prodCornerI4 = (5 * V_CW + 5) * 4;
+        console.log('[DEBUG] Product TL corner pixel: r=' + prodPx2[prodCornerI4] + ' g=' + prodPx2[prodCornerI4+1] + ' b=' + prodPx2[prodCornerI4+2]);
+        console.log('[DEBUG] Product bottom-left pixel: r=' + prodPx2[((V_CH-5)*V_CW+5)*4] + ' g=' + prodPx2[((V_CH-5)*V_CW+5)*4+1] + ' b=' + prodPx2[((V_CH-5)*V_CW+5)*4+2]);
+        // Check drawing pixel at multiple sample points to see where content actually is
+        var sampleY = [Math.round(dy + drawH2 * 0.2), Math.round(dy + drawH2 * 0.5), Math.round(dy + drawH2 * 0.8)];
+        var midX = Math.round(dx + drawW2 / 2);
+        sampleY.forEach(function(sy, i) {
+          var pi4 = (sy * V_CW + midX) * 4;
+          console.log('[DEBUG] Drawing at (midX=' + midX + ', y=' + sy + '): r=' + drPx[pi4] + ' g=' + drPx[pi4+1] + ' b=' + drPx[pi4+2] + ' a=' + drPx[pi4+3]);
+        });
+        // Also scan top/middle/bottom of drawing area for ANY non-transparent pixel
+        var scanW = 20;
+        var foundY = null;
+        for (var sy2 = Math.round(dy); sy2 < Math.round(dy + drawH2); sy2++) {
+          for (var sx2 = Math.round(dx); sx2 < Math.round(dx + drawW2); sx2++) {
+            if (drPx[(sy2 * V_CW + sx2) * 4 + 3] > 10) { foundY = sy2; break; }
+          }
+          if (foundY !== null) break;
+        }
+        console.log('[DEBUG] First non-transparent drawing row: y=' + foundY + ' (dy=' + dy.toFixed(1) + ', dy+drawH2=' + (dy + drawH2).toFixed(1) + ')');
+
+        // Smooth inner-edge darkening: darken pixels near pattern alpha boundary
+        var _vecCtx = canvas.getContext('2d');
+        var _vecData = _vecCtx.getImageData(0, 0, V_CW, V_CH);
+        var _vecPx = _vecData.data;
+        var _vecMaskPx = (productMaskCanvas && productMaskCanvas.width === V_CW && productMaskCanvas.height === V_CH)
+          ? productMaskCanvas.getContext('2d').getImageData(0, 0, V_CW, V_CH).data : null;
+        var _vecOr = 2;
+        var _vecAlphaMask = new Uint8Array(V_CW * V_CH);
+        for (var _vi = 0; _vi < V_CW * V_CH; _vi++) {
+          var _va = drPx[_vi * 4 + 3];
+          if (_va < 10) { _vecAlphaMask[_vi] = 0; continue; }
+          if (_vecMaskPx && _vecMaskPx[_vi * 4 + 3] < 10) { _vecAlphaMask[_vi] = 0; continue; }
+          _vecAlphaMask[_vi] = 1;
+        }
+        var _vecDist = new Int16Array(V_CW * V_CH);
+        for (var _vi2 = 0; _vi2 < _vecDist.length; _vi2++) _vecDist[_vi2] = _vecOr + 1;
+        var _vecx0 = Math.max(1, Math.floor(dx));
+        var _vecx1 = Math.min(V_CW - 1, Math.ceil(dx + drawW2));
+        var _vecy0 = Math.max(1, Math.floor(dy));
+        var _vecy1 = Math.min(V_CH - 1, Math.ceil(dy + drawH2));
+        for (var _vy = _vecy0; _vy < _vecy1; _vy++) {
+          for (var _vx = _vecx0; _vx < _vecx1; _vx++) {
+            var _vi3 = _vy * V_CW + _vx;
+            if (!_vecAlphaMask[_vi3]) continue;
+            var _vecNear = false;
+            for (var _vdy = -1; _vdy <= 1 && !_vecNear; _vdy++) {
+              for (var _vdx = -1; _vdx <= 1 && !_vecNear; _vdx++) {
+                if (_vdx === 0 && _vdy === 0) continue;
+                if (!_vecAlphaMask[(_vy + _vdy) * V_CW + (_vx + _vdx)]) _vecNear = true;
+              }
+            }
+            if (_vecNear) _vecDist[_vi3] = 0;
+          }
+        }
+        for (var _vp = 1; _vp <= _vecOr; _vp++) {
+          for (var _vy2 = _vecy0; _vy2 < _vecy1; _vy2++) {
+            for (var _vx2 = _vecx0; _vx2 < _vecx1; _vx2++) {
+              var _vi4 = _vy2 * V_CW + _vx2;
+              if (_vecDist[_vi4] < _vp) continue;
+              var _vMin = _vecDist[_vi4];
+              for (var _vdy2 = -1; _vdy2 <= 1; _vdy2++) {
+                for (var _vdx2 = -1; _vdx2 <= 1; _vdx2++) {
+                  if (_vdx2 === 0 && _vdy2 === 0) continue;
+                  var _vnDist = _vecDist[(_vy2 + _vdy2) * V_CW + (_vx2 + _vdx2)];
+                  var _vc = _vnDist + 1;
+                  if (_vc < _vMin) _vMin = _vc;
+                }
+              }
+              _vecDist[_vi4] = _vMin;
+            }
+          }
+        }
+        var _vecBk = (typeof brightnessMap !== 'undefined' ? brightnessMap : { normal: 3, shallow: 1.8, deep: 3.6 })[currentEffectType] || 1;
+        var _vecDarkF = Math.min(0.06, 0.05 + _vecBk * 0.1);
+        var _vecMaxD = 2;
+        for (var _vy3 = _vecy0; _vy3 < _vecy1; _vy3++) {
+          for (var _vx3 = _vecx0; _vx3 < _vecx1; _vx3++) {
+            var _vi5 = _vy3 * V_CW + _vx3;
+            if (_vecDist[_vi5] >= _vecMaxD) continue;
+            var _vt = 1.0 - _vecDist[_vi5] / _vecMaxD;
+            var _vf = 1.0 - _vt * _vt * _vecDarkF;
+            var _vi6 = _vi5 * 4;
+            _vecPx[_vi6]   = Math.round(_vecPx[_vi6] * _vf);
+            _vecPx[_vi6+1] = Math.round(_vecPx[_vi6+1] * _vf);
+            _vecPx[_vi6+2] = Math.round(_vecPx[_vi6+2] * _vf);
+          }
+        }
+        _vecCtx.putImageData(_vecData, 0, 0);
+
+        const resultUrl = canvas.toDataURL('image/png');
+        previewBox.innerHTML = `<img src="${resultUrl}" style="width:100%;height:100%;object-fit:contain;border-radius:6px;cursor:pointer;" onclick="openLightbox(this.src)" />`;
+      }
+      } catch (err) {
+        console.error('Preview generation error:', err);
+        previewBox.innerHTML = '<span class="panel-placeholder">生成失败: ' + err.message + '</span>';
+      }
+    }
+
+    var SVG_MIN_PX = 1024;
+
+    function trySvgHiRes(svgText) {
+      if (!svgText || svgText.indexOf('<svg') === -1) return null;
+      var vb = svgText.match(/viewBox="([\d.eE+-]+)[\s,]+([\d.eE+-]+)[\s,]+([\d.eE+-]+)[\s,]+([\d.eE+-]+)"/);
+      var vbH = vb ? parseFloat(vb[4]) : 0;
+      var wMatch = svgText.match(/\swidth="([^"]+)"/);
+      var hMatch = svgText.match(/\sheight="([^"]+)"/);
+      var targetW, targetH;
+      if (vb && vbH > 0) {
+        var scale = SVG_MIN_PX / vbH;
+        targetW = Math.round(vbH * scale);
+        targetH = SVG_MIN_PX;
+      } else {
+        targetW = SVG_MIN_PX;
+        targetH = SVG_MIN_PX;
+      }
+      var modified = svgText;
+      if (wMatch) {
+        modified = modified.replace(/\swidth="[^"]+"/, ' width="' + targetW + 'px"');
+      } else {
+        modified = modified.replace(/<svg/, '<svg width="' + targetW + 'px"');
+      }
+      if (hMatch) {
+        modified = modified.replace(/\sheight="[^"]+"/, ' height="' + targetH + 'px"');
+      } else {
+        modified = modified.replace(/<svg/, '<svg height="' + targetH + 'px"');
+      }
+      return modified;
+    }
+
+    async function loadImageElement(src) {
+      if (!src || src === '' || src === window.location.href) {
+        throw new Error('No image loaded');
+      }
+
+      if (src.includes('/api/public/drawing-file/') || src.includes('/api/public/storage-file')) {
+        try {
+          const blobUrl = await window.__fetchImg(src);
+          try {
+            const resp = await fetch(blobUrl);
+            if (resp.headers.get('content-type') && resp.headers.get('content-type').indexOf('svg') !== -1) {
+              const svgText = await resp.text();
+              const modified = trySvgHiRes(svgText);
+              if (modified) {
+                const newBlob = new Blob([modified], { type: 'image/svg+xml' });
+                const newUrl = URL.createObjectURL(newBlob);
+                return await new Promise(function(resolve, reject) {
+                  const img = new Image();
+                  img.onload = function() { resolve(img); };
+                  img.onerror = function() { reject(new Error('Hi-res SVG load failed')); };
+                  img.src = newUrl;
+                });
+              }
+            }
+          } catch (svgErr) {}
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error('Image load failed: ' + src));
+            img.src = blobUrl;
+          });
+        } catch (err) {
+          console.error('loadImageElement fetchImg error:', err);
+          throw err;
+        }
+      }
+
+      if (src.startsWith('data:image/svg+xml')) {
+        try {
+          const resp = await fetch(src);
+          const svgText = await resp.text();
+          const modified = trySvgHiRes(svgText);
+          if (modified) {
+            const newBlob = new Blob([modified], { type: 'image/svg+xml' });
+            const newUrl = URL.createObjectURL(newBlob);
+            return await new Promise(function(resolve, reject) {
+              const img = new Image();
+              img.onload = function() { resolve(img); };
+              img.onerror = function() { reject(new Error('Hi-res SVG data URI load failed')); };
+              img.src = newUrl;
+            });
+          }
+        } catch (dataErr) {}
+      }
+
+      const isLocal = src.startsWith('data:') || src.startsWith('blob:');
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        if (!isLocal) img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Image load failed: ' + src));
+        img.src = src;
+      });
+    }
+
+    async function loadSampleRefImage(effectType) {
+      if (!recognizedMaterial) { console.log('loadSampleRefImage: no material'); return null; }
+      try {
+        const machine = document.getElementById('machineSelect').value;
+        const typeMap = { vector: 'vector', jarvis: 'bitmap', depth: 'depth' };
+        const apiType = typeMap[currentType] || currentType;
+        const res = await __fetchApi(`/api/public/samples?material=${encodeURIComponent(recognizedMaterial)}&drawingType=${encodeURIComponent(apiType)}&machine=${encodeURIComponent(machine)}`);
+        const data = await res.json();
+        const samples = data.items || [];
+        if (samples.length === 0) return null;
+        const sample = samples[0];
+        // Pick image based on effect type
+        const imageField = effectType === 'shallow' ? 'imageShallow'
+                          : effectType === 'deep'  ? 'imageDeep'
+                          : 'imageRefer';
+        const imagePath = sample[imageField];
+        console.log('loadSampleRefImage imageField:', imageField, 'path:', imagePath);
+        if (!imagePath) return null;
+        return loadImageElement(imagePath);
+      } catch (err) {
+        console.error('loadSampleRefImage error:', err);
+        return null;
+      }
+    }
+
+    // Clear image
+    trashBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _bgRemovalCancelled = true;
+      previewImg.src = '';
+      _resetUploadPlaceholder();
+      if (_removeBgQuotaExhausted) {
+        previewImg.style.display = 'none';
+        previewImg.style.visibility = '';
+        uploadPlaceholder.style.display = 'flex';
+        uploadPlaceholder.style.zIndex = '1';
+        uploadPlaceholder.innerHTML = '<div style="text-align:center;color:#e74c3c;font-size:14px;line-height:2;padding:220px 20px 0;font-weight:500;">图像处理额度已耗尽<br><span style="font-size:13px;color:#888;font-weight:400;">请飞书联系：李星雨</span></div>';
+        uploadInput.disabled = true;
+        uploadBox.style.opacity = '0.6';
+        uploadBox.style.cursor = 'not-allowed';
+      }
+      trashBtn.classList.remove('visible');
+      uploadInput.value = '';
+      productMaskCanvas = null;
+      productMaskBounds = null;
+      _flatSurfaceMask = null;
+      _flatSurfaceBounds = null;
+      _flatSurfaceW = 0;
+      _flatSurfaceH = 0;
+      _showFlatHighlight = false;
+      document.getElementById('flatDetectBtn').classList.remove('visible', 'active');
+      hideFlatTip();
+      window.__bmMaskPx = null;
+      hideCropOverlay();
+      document.getElementById('materialValue').textContent = '—';
+      syncMaterialDropdown('');
+      recognizedMaterial = null;
+      _aiRecognizedText = '';
+      document.getElementById('previewBox').innerHTML = '<span class="panel-placeholder">等待上传产品图后自动生成</span>';
+    });
+
+    var _flatTipDismissed = false;
+    function showFlatTip() {
+      _flatTipDismissed = false;
+      var tip = document.getElementById('flatTip');
+      if (tip) tip.classList.add('show');
+    }
+    function hideFlatTip() {
+      var tip = document.getElementById('flatTip');
+      if (tip) tip.classList.remove('show');
+    }
+    document.getElementById('flatTipClose').addEventListener('click', function(e) {
+      e.stopPropagation();
+      _flatTipDismissed = true;
+      hideFlatTip();
+    });
+
+    // ===== Flat Surface Detection Toggle =====
+    var flatDetectBtn = document.getElementById('flatDetectBtn');
+    flatDetectBtn.addEventListener('click', async function(e) {
+      e.stopPropagation();
+      if (_depthModelFailed) {
+        _showDepthUnavailableTip();
+        return;
+      }
+      if (!_flatSurfaceMask) {
+        if (productMaskCanvas) {
+          flatDetectBtn.style.opacity = '0.5';
+          flatDetectBtn.style.pointerEvents = 'none';
+          var MAX_FLAT = 512;
+          var pw = productMaskCanvas.width, ph = productMaskCanvas.height;
+          var fScale = Math.min(1, MAX_FLAT / Math.max(pw, ph));
+          var fw = Math.round(pw * fScale), fh = Math.round(ph * fScale);
+          var smallCv = document.createElement('canvas');
+          smallCv.width = fw; smallCv.height = fh;
+          smallCv.getContext('2d').drawImage(productMaskCanvas, 0, 0, fw, fh);
+          try {
+            var result = await detectFlatSurfaces(smallCv, null);
+            if (result) {
+              _flatSurfaceMask = result.mask;
+              _flatSurfaceBounds = result.bounds;
+              _flatSurfaceW = result.width;
+              _flatSurfaceH = result.height;
+              _showFlatHighlight = true;
+              flatDetectBtn.classList.add('active');
+              if (!_flatTipDismissed) showFlatTip();
+            } else {
+              flatDetectBtn.classList.remove('active');
+            }
+          } catch(clickErr) {
+            console.error('Flat surface detection click error:', clickErr);
+            flatDetectBtn.classList.remove('active');
+          } finally {
+            flatDetectBtn.style.opacity = '';
+            flatDetectBtn.style.pointerEvents = '';
+          }
+        }
+      } else {
+        _showFlatHighlight = !_showFlatHighlight;
+        flatDetectBtn.classList.toggle('active', _showFlatHighlight);
+        if (_showFlatHighlight && !_flatTipDismissed) showFlatTip();
+        if (!_showFlatHighlight) hideFlatTip();
+      }
+      requestAnimationFrame(drawCropOverlay);
+    });
+
+    // ===== Effect Type Buttons =====
+    const btnRefParams = document.getElementById('btnRefParams');
+    const btnShallow = document.getElementById('btnShallow');
+    const btnDeep = document.getElementById('btnDeep');
+    const btnContourDot = document.getElementById('btnContourDot');
+    const btnContourLine = document.getElementById('btnContourLine');
+    const effectTypeOptions = document.getElementById('effectTypeOptions');
+    const sectionRecommend = document.getElementById('sectionRecommend');
+    const sectionEffectType = document.getElementById('sectionEffectType');
+    const col3Bg = document.getElementById('col3Bg');
+    const materialSelect = document.getElementById('materialSelect');
+    const materialInput = document.getElementById('materialInput');
+    const materialToggle = document.getElementById('materialToggle');
+    const materialDropdown = document.getElementById('materialDropdown');
+    const materialCombobox = document.getElementById('materialCombobox');
+    let materialOptions = []; // {value, label}
+    let materialSelectedValue = '';
+    var _pendingAiRawText = '';
+    var _aiRecognizedText = '';
+
+
+    function renderMaterialOptions(filter) {
+      var f = (filter || '').toLowerCase();
+      var html = '<div class="combobox-option" data-value="">— 材质选择 —</div>';
+      materialOptions.forEach(function(m) {
+        var match = !f || m.label.toLowerCase().includes(f) || m.value.toLowerCase().includes(f);
+        if (match) {
+          var sel = m.value === materialSelectedValue ? ' selected' : '';
+          html += '<div class="combobox-option' + sel + '" data-value="' + m.value + '">' + m.label + '</div>';
+        }
+      });
+      materialDropdown.innerHTML = html;
+    }
+
+    function openMaterialDropdown() {
+      renderMaterialOptions('');
+      materialDropdown.classList.add('open');
+    }
+
+    function closeMaterialDropdown() {
+      materialDropdown.classList.remove('open');
+    }
+
+    function selectMaterial(value, label) {
+      materialSelectedValue = value;
+      materialInput.value = label || '';
+      materialSelect.value = value;
+      recognizedMaterial = value;
+      if (!_aiRecognizedText) {
+        document.getElementById('materialValue').textContent = value;
+      }
+      closeMaterialDropdown();
+      if (currentType) {
+        if (!effectTypeSelected) {
+          activateBtn(btnRefParams, 'normal');
+        } else {
+          activateBtn(
+            [btnRefParams, btnShallow, btnDeep].find(b => b.classList.contains('active')) || btnRefParams,
+            currentEffectType
+          );
+        }
+      }
+      updateParamSectionsVisibility();
+    }
+
+    // Load material list by machine
+    function loadMaterialsByMachine(machine, drawingType, callback) {
+      materialOptions = [];
+      materialSelectedValue = '';
+      materialInput.value = '';
+      materialSelect.innerHTML = '<option value="">— 材质选择 —</option>';
+      if (!machine) { if (callback) callback(); return; }
+      var url = '/api/public/materials/by-machine?machine=' + encodeURIComponent(machine);
+      if (drawingType) url += '&drawingType=' + encodeURIComponent(drawingType);
+      __fetchApi(url)
+        .then(r => r.json())
+        .then(data => {
+          const mats = data.items || [];
+          mats.forEach(m => {
+            var label = m.label || m.value;
+            materialOptions.push({ value: m.value, label: label });
+            var opt = document.createElement('option');
+            opt.value = m.value;
+            opt.textContent = label;
+            materialSelect.appendChild(opt);
+          });
+          renderMaterialOptions('');
+          if (_pendingAiRawText) {
+            autoSelectMaterialByKeywords(_pendingAiRawText);
+            _pendingAiRawText = '';
+          }
+          if (callback) callback();
+        });
+    }
+
+    // Input: focus -> open all, typing -> filter
+    materialInput.addEventListener('focus', openMaterialDropdown);
+    materialInput.addEventListener('input', function() {
+      renderMaterialOptions(materialInput.value);
+      materialDropdown.classList.add('open');
+    });
+
+    // Toggle button
+    materialToggle.addEventListener('click', function() {
+      if (materialDropdown.classList.contains('open')) {
+        closeMaterialDropdown();
+      } else {
+        materialInput.focus();
+        openMaterialDropdown();
+      }
+    });
+
+    // Click option
+    materialDropdown.addEventListener('click', function(e) {
+      var opt = e.target.closest('.combobox-option');
+      if (!opt) return;
+      selectMaterial(opt.dataset.value, opt.textContent);
+    });
+
+    // Click outside to close
+    document.addEventListener('click', function(e) {
+      if (!materialCombobox.contains(e.target)) {
+        closeMaterialDropdown();
+      }
+    });
+
+    // Sync material combobox from external value
+    function syncMaterialDropdown(value) {
+      materialSelectedValue = value || '';
+      materialSelect.value = value || '';
+      var found = materialOptions.find(function(m) { return m.value === value; });
+      materialInput.value = found ? found.label : '';
+    }
+
+    var _materialPopupShownOnInit = false;
+
+    function showNoMaterialPopup(isMatchFail) {
+      var existing = document.getElementById('noMaterialPopup');
+      if (existing) existing.remove();
+
+      var overlay = document.createElement('div');
+      overlay.id = 'noMaterialPopup';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.35);z-index:99999;display:flex;align-items:center;justify-content:center;';
+
+      var box = document.createElement('div');
+      box.style.cssText = 'background:#fff;border-radius:12px;padding:24px 28px 20px;position:relative;box-shadow:0 8px 30px rgba(0,0,0,0.18);width:620px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column;';
+
+      var closeBtn = document.createElement('button');
+      closeBtn.textContent = '\u00d7';
+      closeBtn.style.cssText = 'position:absolute;top:10px;right:14px;background:none;border:none;font-size:22px;color:#999;cursor:pointer;line-height:1;padding:2px 6px;';
+      closeBtn.onmouseenter = function() { this.style.color = '#333'; };
+      closeBtn.onmouseleave = function() { this.style.color = '#999'; };
+      closeBtn.onclick = function() { overlay.remove(); };
+
+      var msg = document.createElement('div');
+      msg.style.cssText = 'font-size:14px;color:#333;font-weight:500;margin-bottom:12px;line-height:1.5;';
+      msg.textContent = isMatchFail
+        ? '\u6682\u65e0\u6b64\u7c7b\u6750\u8d28\u53c2\u6570\uff0c\u4ee5\u4e0b\u4e3a\u5df2\u5f55\u5165\u7684\u6750\u8d28\u53c2\u8003\u5217\u8868'
+        : '\u4ee5\u4e0b\u4e3a\u5df2\u5f55\u5165\u7684\u6750\u8d28\u53c2\u8003\u5217\u8868';
+
+      var searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.placeholder = '\u641c\u7d22\u6750\u8d28...';
+      searchInput.style.cssText = 'width:100%;box-sizing:border-box;height:34px;border:1px solid #d1d5db;border-radius:6px;padding:0 10px;font-size:13px;outline:none;margin-bottom:14px;';
+      searchInput.onfocus = function() { this.style.borderColor = '#28be44'; };
+      searchInput.onblur = function() { this.style.borderColor = '#d1d5db'; };
+
+      var contentArea = document.createElement('div');
+      contentArea.style.cssText = 'flex:1;overflow-y:auto;';
+      var loadingDiv = document.createElement('div');
+      loadingDiv.style.cssText = 'text-align:center;padding:30px 0;color:#999;font-size:13px;';
+      loadingDiv.textContent = '\u52a0\u8f7d\u4e2d...';
+      contentArea.appendChild(loadingDiv);
+
+      var allMachineData = {};
+
+      function renderContent(keyword) {
+        contentArea.innerHTML = '';
+        var kw = (keyword || '').toLowerCase();
+        var machineKeys = Object.keys(allMachineData);
+        if (machineKeys.length === 0) {
+          var emptyDiv = document.createElement('div');
+          emptyDiv.style.cssText = 'text-align:center;padding:30px 0;color:#999;font-size:13px;';
+          emptyDiv.textContent = '\u6682\u65e0\u6750\u8d28\u6570\u636e';
+          contentArea.appendChild(emptyDiv);
+          return;
+        }
+        var hasAny = false;
+        machineKeys.forEach(function(machine) {
+          var vectorMats = allMachineData[machine].vector.slice();
+          var bitmapMats = allMachineData[machine].bitmap.slice();
+          if (kw) {
+            vectorMats = vectorMats.filter(function(m) { return m.toLowerCase().indexOf(kw) >= 0; });
+            bitmapMats = bitmapMats.filter(function(m) { return m.toLowerCase().indexOf(kw) >= 0; });
+          }
+          if (vectorMats.length === 0 && bitmapMats.length === 0) return;
+          hasAny = true;
+
+          var section = document.createElement('div');
+          section.style.cssText = 'margin-bottom:16px;';
+          var title = document.createElement('div');
+          title.style.cssText = 'font-size:13px;font-weight:600;color:#111;margin-bottom:8px;padding:4px 0;border-bottom:1px solid #e5e7eb;';
+          title.textContent = machine;
+          section.appendChild(title);
+
+          var cols = document.createElement('div');
+          cols.style.cssText = 'display:flex;gap:12px;';
+
+          function buildCol(mats, label, bgColor, textColor, dType) {
+            var col = document.createElement('div');
+            col.style.cssText = 'flex:1;min-width:0;';
+            var header = document.createElement('div');
+            header.style.cssText = 'font-size:12px;color:' + textColor + ';background:' + bgColor + ';padding:3px 8px;border-radius:10px;display:inline-block;margin-bottom:6px;font-weight:500;';
+            header.textContent = label;
+            col.appendChild(header);
+            var list = document.createElement('div');
+            list.style.cssText = 'max-height:150px;overflow-y:auto;';
+            if (mats.length === 0) {
+              var empty = document.createElement('div');
+              empty.style.cssText = 'font-size:12px;color:#bbb;padding:4px 0;';
+              empty.textContent = '\u65e0';
+              list.appendChild(empty);
+            } else {
+              mats.forEach(function(mat) {
+                var item = document.createElement('div');
+                item.style.cssText = 'font-size:13px;color:#333;padding:4px 8px;border-radius:4px;';
+                item.textContent = mat;
+                list.appendChild(item);
+              });
+            }
+            col.appendChild(list);
+            return col;
+          }
+
+          cols.appendChild(buildCol(vectorMats, '\u77e2\u91cf\u56fe', '#dbeafe', '#1d4ed8', 'vector'));
+          cols.appendChild(buildCol(bitmapMats, '\u4f4d\u56fe', '#fce7f3', '#be185d', 'bitmap'));
+          section.appendChild(cols);
+          contentArea.appendChild(section);
+        });
+
+        if (!hasAny) {
+          var noResult = document.createElement('div');
+          noResult.style.cssText = 'text-align:center;padding:30px 0;color:#999;font-size:13px;';
+          noResult.textContent = '\u672a\u627e\u5230\u5339\u914d\u7684\u6750\u8d28';
+          contentArea.appendChild(noResult);
+        }
+      }
+
+      searchInput.oninput = function() { renderContent(this.value); };
+
+      box.appendChild(closeBtn);
+      box.appendChild(msg);
+      box.appendChild(searchInput);
+      box.appendChild(contentArea);
+      overlay.appendChild(box);
+      overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+      document.body.appendChild(overlay);
+
+      __fetchApi('/api/public/samples').then(function(res) {
+        return res.json();
+      }).then(function(data) {
+        var items = data.items || [];
+        allMachineData = {};
+        items.forEach(function(s) {
+          var machine = s.machine || '\u672a\u77e5\u673a\u578b';
+          if (!allMachineData[machine]) {
+            allMachineData[machine] = { vector: [], bitmap: [] };
+          }
+          var mat = s.material;
+          if (s.drawingType === 'vector') {
+            if (allMachineData[machine].vector.indexOf(mat) < 0) {
+              allMachineData[machine].vector.push(mat);
+            }
+          } else if (s.drawingType === 'bitmap') {
+            if (allMachineData[machine].bitmap.indexOf(mat) < 0) {
+              allMachineData[machine].bitmap.push(mat);
+            }
+          }
+        });
+        Object.keys(allMachineData).forEach(function(m) {
+          allMachineData[m].vector.sort();
+          allMachineData[m].bitmap.sort();
+        });
+        renderContent('');
+      }).catch(function() {
+        contentArea.innerHTML = '';
+        var errDiv = document.createElement('div');
+        errDiv.style.cssText = 'text-align:center;padding:30px 0;color:#e74c3c;font-size:13px;';
+        errDiv.textContent = '\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u5173\u95ed\u91cd\u8bd5';
+        contentArea.appendChild(errDiv);
+      });
+    }
+
+    function autoSelectMaterialByKeywords(rawText) {
+      if (!rawText || materialOptions.length === 0) {
+        if (materialOptions.length > 0) renderMaterialOptions('');
+        return;
+      }
+      console.log('[AI Material] autoSelect by char overlap from:', rawText, 'options:', materialOptions.length);
+
+      var genericChars = '的了吧呢在是有和与或及这那个一件种类型款色度感';
+
+      var scored = materialOptions.map(function(m, idx) {
+        var name = m.label || m.value || '';
+        var score = 0;
+        var meaningful = 0;
+        var seen = {};
+        for (var i = 0; i < name.length; i++) {
+          var ch = name.charAt(i);
+          if (seen[ch]) continue;
+          if (!/[\u4e00-\u9fa5a-zA-Z0-9]/.test(ch)) continue;
+          if (genericChars.indexOf(ch) >= 0) continue;
+          seen[ch] = true;
+          meaningful++;
+          if (rawText.indexOf(ch) >= 0) {
+            score++;
+          }
+        }
+        var ratio = meaningful > 0 ? score / meaningful : 0;
+        return { m: m, score: score, ratio: ratio, idx: idx };
+      });
+
+      scored.sort(function(a, b) {
+        if (a.score !== b.score) return b.score - a.score;
+        return a.idx - b.idx;
+      });
+      materialOptions = scored.map(function(s) { return s.m; });
+      renderMaterialOptions('');
+      var top = scored[0];
+      if (top && top.score > 0 && top.ratio >= 0.1) {
+        console.log('[AI Material] best match:', top.m.value, 'score:', top.score, 'ratio:', top.ratio.toFixed(2));
+        selectMaterial(top.m.value, top.m.label);
+      } else {
+        console.log('[AI Material] no confident match (top score:', top ? top.score : 0, 'ratio:', top ? top.ratio.toFixed(2) : 'N/A', ')');
+        showNoMaterialPopup(true);
+      }
+    }
+
+    // ===== Machine Change Handler =====
+    function onFrontendMachineChange() {
+      const m = document.getElementById('machineSelect').value;
+
+      // Hide/show depth option based on machine
+      const profile = MACHINE_PROFILES[m];
+      typeDepth.style.display = profile && profile.supportedTypes.includes('depth') ? '' : 'none';
+      // Also sync dropdown depth item visibility
+      var ddDepthEl = document.getElementById('ddDepth');
+      if (ddDepthEl) ddDepthEl.style.display = profile && profile.supportedTypes.includes('depth') ? '' : 'none';
+
+      // Clear drawing type highlights
+      [typeVector, typeJarvis, typeDepth].forEach(t => {
+        if (t.classList.contains('selected')) {
+          t.classList.remove('selected');
+          t.querySelector('.check').textContent = '';
+        }
+      });
+
+      // Clear currentType only if new machine doesn't support it
+      const typeNormMap2 = { jarvis: 'bitmap', depth: 'depth' };
+      const normType2 = currentType ? (typeNormMap2[currentType] || currentType) : null;
+      if (currentType && (!profile || !profile.supportedTypes.includes(normType2))) {
+        currentType = null;
+      }
+
+      // Re-highlight drawing type if preserved
+      if (currentType) {
+        const typeElMap = { vector: typeVector, jarvis: typeJarvis, depth: typeDepth };
+        const typeEl = typeElMap[currentType];
+        if (typeEl) {
+          typeEl.classList.add('selected');
+          typeEl.querySelector('.check').textContent = '✓';
+        }
+        const ddMap = { vector: 'ddVector', jarvis: 'ddJarvis', depth: 'ddDepth' };
+        const ddBtn = document.getElementById('btnAiDrawingTitle');
+        if (ddBtn) {
+          const shortLabels = { vector: '矢量图', jarvis: 'Jarvis位图', depth: '浮雕深度图' };
+          ddBtn.textContent = (shortLabels[currentType] || '推荐图纸') + ' ▾';
+        }
+        document.querySelectorAll('#drawingTypeDropdown .dropdown-item').forEach(function(el) { el.classList.remove('active'); });
+        const ddActive = document.getElementById(ddMap[currentType]);
+        if (ddActive) ddActive.classList.add('active');
+        const typeLabels = { vector: '矢量图（Vector）', jarvis: 'Jarvis位图（Jarvis Bitmap）', depth: '浮雕深度图（Relief Depth Map）' };
+        aiDrawingValue.textContent = typeLabels[currentType] || '';
+      } else {
+        var ddBtnReset = document.getElementById('btnAiDrawingTitle');
+        if (ddBtnReset) ddBtnReset.textContent = '推荐图纸 ▾';
+        document.querySelectorAll('#drawingTypeDropdown .dropdown-item').forEach(function(el) { el.classList.remove('active'); });
+        aiDrawingValue.textContent = '';
+      }
+
+      // Reload materials for this machine (and current drawing type if any)
+      loadMaterialsByMachine(m, currentType, function() {
+        if (_aiRecognizedText) {
+          _pendingAiRawText = _aiRecognizedText;
+          autoSelectMaterialByKeywords(_pendingAiRawText);
+          _pendingAiRawText = '';
+        }
+      });
+
+      // Keep AI drawing box when switching machines
+      document.getElementById('previewBox').innerHTML = '<span class="panel-placeholder">等待材质和图纸选择后自动生成</span>';
+
+      // Clear material dropdown (different machine may have different materials)
+      // but preserve AI-recognized text in materialValue display
+      recognizedMaterial = null;
+      if (!_aiRecognizedText) {
+        document.getElementById('materialValue').textContent = '—';
+      }
+      syncMaterialDropdown('');
+      effectTypeSelected = false;
+      sectionRecommend.classList.add('hidden');
+      effectTypeOptions.style.display = currentType ? 'grid' : 'none';
+      paramList.innerHTML = '';
+      [btnRefParams, btnShallow, btnDeep].forEach(b => b.classList.remove('active'));
+      updateParamSectionsVisibility();
+    }
+
+    function updateParamSectionsVisibility() {
+      const machine = document.getElementById('machineSelect').value;
+      const machineProfile = MACHINE_PROFILES[machine];
+      // Normalize currentType to DB value for comparison: jarvis→bitmap, depth→depth
+      const typeNormMap = { jarvis: 'bitmap', depth: 'depth' };
+      const normalizedType = currentType ? (typeNormMap[currentType] || currentType) : null;
+      const machineSupportsCurrentType = machineProfile
+        ? machineProfile.supportedTypes.includes(normalizedType)
+        : true;
+      const showEffectType = currentType && machineSupportsCurrentType;
+      sectionEffectType.classList.toggle('hidden', !showEffectType);
+      // Param sections show when both drawing type AND effect type are selected
+      const show = effectTypeSelected && currentType;
+      [sectionRecommend].forEach(el => {
+        el.classList.toggle('hidden', !show);
+      });
+      // Image: high opacity when hidden, faded when visible
+      col3Bg.classList.toggle('faded', show);
+    }
+
+    let currentEffectType = 'normal'; // 'normal' | 'shallow' | 'deep'
+
+    function activateBtn(btn, group, subtype) {
+      [btnRefParams, btnShallow, btnDeep].forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      effectTypeSelected = true;
+
+      if (btn === btnShallow) currentEffectType = 'shallow';
+      else if (btn === btnDeep) currentEffectType = 'deep';
+      else currentEffectType = 'normal';
+      if (!currentType || !recognizedMaterial) {
+        renderRecommendedParams(true);
+        updateParamSectionsVisibility();
+        return;
+      }
+      // Fetch real params from backend by (machine + drawing_type + material)
+      const machine = document.getElementById('machineSelect').value;
+      const typeMap = { vector: 'vector', jarvis: 'bitmap', depth: 'depth' };
+      const apiType = typeMap[currentType] || currentType;
+      __fetchApi(`/api/public/samples?material=${encodeURIComponent(recognizedMaterial)}&drawingType=${encodeURIComponent(apiType)}&machine=${encodeURIComponent(machine)}`)
+        .then(r => r.json())
+        .then(data => {
+          const samples = data.items || [];
+          if (samples.length > 0) {
+            renderParamsFromSample(samples[0]);
+          }
+          // If samples.length === 0 → keep params at 0, don't fall back
+        })
+        .catch(() => { renderRecommendedParams(true); });
+      updateParamSectionsVisibility();
+      if (previewImg.src && previewImg.style.display !== 'none' && !_bgRemovalInProgress && currentDrawing && recognizedMaterial && currentType) {
+        generatePreview();
+      }
+    }
+
+    function renderParamsFromSample(sample) {
+      const paramRowMap = {
+        '功率': 'referPower',
+        '速度': 'referSpeed',
+        '次数': 'referCount',
+        '密度': 'referDensity',
+        '频率': 'referFreq',
+        'DPI': 'referDpi',
+        '打点时间': 'referDotTime',
+      };
+      const params = getRecommendedParams();
+      paramList.innerHTML = params.map(p => {
+        const key = paramRowMap[p.label];
+        const val = (key && sample[key] !== undefined) ? sample[key] : 0;
+        return `<div class="param-item"><span class="param-name">${p.label}${p.unit ? ' ' + p.unit : ''}</span><span class="param-val">${val}${p.unit === '%' ? '%' : ''}</span></div>`;
+      }).join('');
+    }
+
+    btnRefParams.addEventListener('click', () => activateBtn(btnRefParams, 'normal'));
+    btnShallow.addEventListener('click', () => activateBtn(btnShallow, 'shallow'));
+    btnDeep.addEventListener('click', () => activateBtn(btnDeep, 'deep'));
+
+    // ===== Param refs (must be declared before render calls) =====
+    const paramList = document.querySelector('.param-list');
+    const typeVector = document.getElementById('typeVector');
+    const typeJarvis = document.getElementById('typeJarvis');
+    const typeDepth = document.getElementById('typeDepth');
+
+    let currentType = null;
+    let recognizedMaterial = null;
+    let currentDrawing = null;
+    let drawingSource = null; // 'ai' | 'user' | null
+    var productMaskCanvas = null;
+    var productMaskBounds = null;
+    var _flatSurfaceMask = null;
+    var _flatSurfaceBounds = null;
+    var _flatSurfaceW = 0;
+    var _flatSurfaceH = 0;
+    var _showFlatHighlight = false;
+
+    var _DEPTH_MODEL_URLS = [
+      'https://hf-mirror.com/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx',
+      'https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx',
+      'https://modelscope.cn/models/onnx-community/depth-anything-v2-small/resolve/master/onnx/model.onnx'
+    ];
+    var _DEPTH_CACHE_NAME = 'depth-anything-v2-small-v1';
+    var _depthSession = null;
+    var _depthModelLoading = false;
+    var _depthModelReady = false;
+    var _depthModelFailed = false;
+    var _DEPTH_INPUT_SIZE = 518;
+
+    async function _loadDepthModel() {
+      if (_depthSession) return _depthSession;
+      if (_depthModelFailed) return null;
+      if (_depthModelLoading) {
+        while (_depthModelLoading) await new Promise(function(r) { setTimeout(r, 200); });
+        return _depthSession;
+      }
+      _depthModelLoading = true;
+      try {
+        if (typeof ort === 'undefined') {
+          console.warn('ONNX Runtime Web not loaded (CDN blocked by browser)');
+          _depthModelFailed = true;
+          _showDepthUnavailableTip();
+          return null;
+        }
+        ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
+        var _DEPTH_CACHE_KEY = new URL('/__depth_model__', location.origin).href;
+        var modelBuffer = null;
+        try {
+          var cache = await caches.open(_DEPTH_CACHE_NAME);
+          var cached = await cache.match(_DEPTH_CACHE_KEY);
+          if (cached) {
+            console.log('Depth model: loading from cache...');
+            modelBuffer = await cached.arrayBuffer();
+          }
+        } catch(cacheErr) {
+          console.warn('Cache API unavailable:', cacheErr.message);
+        }
+        if (!modelBuffer) {
+          for (var mi = 0; mi < _DEPTH_MODEL_URLS.length; mi++) {
+            try {
+              console.log('Depth model: downloading from ' + (mi === 0 ? 'HuggingFace' : 'mirror') + '...');
+              var resp = await fetch(_DEPTH_MODEL_URLS[mi]);
+              if (!resp.ok) throw new Error('HTTP ' + resp.status);
+              modelBuffer = await resp.arrayBuffer();
+              if (cache) {
+                try {
+                  await cache.put(_DEPTH_CACHE_KEY, new Response(modelBuffer, { headers: { 'Content-Type': 'application/octet-stream' } }));
+                  console.log('Depth model: cached for future use');
+                } catch(putErr) {
+                  console.warn('Cache put failed:', putErr.message);
+                }
+              }
+              break;
+            } catch(fetchErr) {
+              console.warn('Depth model fetch failed (' + _DEPTH_MODEL_URLS[mi] + '):', fetchErr.message);
+            }
+          }
+        }
+        if (!modelBuffer) {
+          console.warn('Depth model: all download sources failed');
+          _depthModelFailed = true;
+          _showDepthUnavailableTip();
+          return null;
+        }
+        console.log('Depth model: creating ONNX session (' + (modelBuffer.byteLength / 1048576).toFixed(1) + 'MB)...');
+        _depthSession = await ort.InferenceSession.create(modelBuffer, {
+          executionProviders: ['wasm']
+        });
+        _depthModelReady = true;
+        console.log('Depth model: ready');
+        return _depthSession;
+      } catch(err) {
+        console.error('Depth model load failed:', err);
+        _depthModelFailed = true;
+        return null;
+      } finally {
+        _depthModelLoading = false;
+      }
+    }
+
+    function _preprocessForDepth(canvas) {
+      var S = _DEPTH_INPUT_SIZE;
+      var tmp = document.createElement('canvas');
+      tmp.width = S; tmp.height = S;
+      var tctx = tmp.getContext('2d');
+      tctx.drawImage(canvas, 0, 0, S, S);
+      var imgData = tctx.getImageData(0, 0, S, S);
+      var px = imgData.data;
+      var n = S * S;
+      var tensor = new Float32Array(3 * n);
+      var mean = [0.485, 0.456, 0.406];
+      var std = [0.229, 0.224, 0.225];
+      for (var i = 0; i < n; i++) {
+        var pi = i * 4;
+        tensor[i] = (px[pi] / 255 - mean[0]) / std[0];
+        tensor[n + i] = (px[pi + 1] / 255 - mean[1]) / std[1];
+        tensor[2 * n + i] = (px[pi + 2] / 255 - mean[2]) / std[2];
+      }
+      return tensor;
+    }
+
+    async function _runDepthInference(canvas) {
+      var session = await _loadDepthModel();
+      if (!session) return null;
+      var S = _DEPTH_INPUT_SIZE;
+      var inputData = _preprocessForDepth(canvas);
+      var inputTensor = new ort.Tensor('float32', inputData, [1, 3, S, S]);
+      var inputName = session.inputNames[0];
+      var feeds = {};
+      feeds[inputName] = inputTensor;
+      var t0 = performance.now();
+      var results = await session.run(feeds);
+      var t1 = performance.now();
+      console.log('Depth inference: ' + (t1 - t0).toFixed(0) + 'ms');
+      var outputName = session.outputNames[0];
+      var output = results[outputName];
+      var depthData = output.data;
+      var outH = output.dims[2] || S;
+      var outW = output.dims[3] || S;
+      return { data: depthData, width: outW, height: outH };
+    }
+
+    function _depthToFlatMask(depthResult, productMask, w, h) {
+      var dW = depthResult.width;
+      var dH = depthResult.height;
+      var depth = depthResult.data;
+      var n = w * h;
+      var scaleX = dW / w;
+      var scaleY = dH / h;
+      var sampleDepth = new Float32Array(n);
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          var dx = Math.min(Math.floor(x * scaleX), dW - 1);
+          var dy = Math.min(Math.floor(y * scaleY), dH - 1);
+          sampleDepth[y * w + x] = depth[dy * dW + dx];
+        }
+      }
+      var normalVar = new Float32Array(n);
+      for (var y = 1; y < h - 1; y++) {
+        for (var x = 1; x < w - 1; x++) {
+          var i = y * w + x;
+          if (!productMask[i]) continue;
+          var dzdx = (sampleDepth[i + 1] - sampleDepth[i - 1]) * 0.5;
+          var dzdy = (sampleDepth[i + w] - sampleDepth[i - w]) * 0.5;
+          normalVar[i] = Math.sqrt(dzdx * dzdx + dzdy * dzdy);
+        }
+      }
+      var varSum = 0, varCnt = 0;
+      for (var i = 0; i < n; i++) {
+        if (productMask[i] && normalVar[i] > 0) { varSum += normalVar[i]; varCnt++; }
+      }
+      var varMean = varCnt > 0 ? varSum / varCnt : 10;
+      var flatThresh = varMean * 0.35;
+      var binary = new Uint8Array(n);
+      for (var i = 0; i < n; i++) {
+        binary[i] = (productMask[i] && normalVar[i] > 0 && normalVar[i] <= flatThresh) ? 1 : 0;
+      }
+      var dilated = new Uint8Array(n);
+      for (var y = 1; y < h - 1; y++) {
+        for (var x = 1; x < w - 1; x++) {
+          var found = false;
+          for (var ky = -1; ky <= 1 && !found; ky++) {
+            for (var kx = -1; kx <= 1 && !found; kx++) {
+              if (binary[(y + ky) * w + (x + kx)]) found = true;
+            }
+          }
+          dilated[y * w + x] = found ? 1 : 0;
+        }
+      }
+      for (var y = 2; y < h - 2; y++) {
+        for (var x = 2; x < w - 2; x++) {
+          var all = true;
+          for (var ky = -1; ky <= 1 && all; ky++) {
+            for (var kx = -1; kx <= 1 && all; kx++) {
+              if (!dilated[(y + ky) * w + (x + kx)]) all = false;
+            }
+          }
+          binary[y * w + x] = all ? 1 : 0;
+        }
+      }
+      var labels = new Int32Array(n);
+      var labelCnt = 0;
+      var sizes = [];
+      var stk = new Int32Array(n);
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          var i = y * w + x;
+          if (!binary[i] || labels[i]) continue;
+          labelCnt++;
+          var sp = 0;
+          stk[sp++] = i;
+          labels[i] = labelCnt;
+          var sz = 0;
+          while (sp > 0) {
+            var ci = stk[--sp]; sz++;
+            var cx = ci % w;
+            var cy = (ci - cx) / w;
+            if (cx > 0 && binary[ci - 1] && !labels[ci - 1]) { labels[ci - 1] = labelCnt; stk[sp++] = ci - 1; }
+            if (cx < w - 1 && binary[ci + 1] && !labels[ci + 1]) { labels[ci + 1] = labelCnt; stk[sp++] = ci + 1; }
+            if (cy > 0 && binary[ci - w] && !labels[ci - w]) { labels[ci - w] = labelCnt; stk[sp++] = ci - w; }
+            if (cy < h - 1 && binary[ci + w] && !labels[ci + w]) { labels[ci + w] = labelCnt; stk[sp++] = ci + w; }
+          }
+          sizes.push(sz);
+        }
+      }
+      var minArea = Math.floor(w * h * 0.015);
+      var largestIdx = -1, largestSz = 0;
+      for (var j = 0; j < sizes.length; j++) {
+        if (sizes[j] > largestSz) { largestSz = sizes[j]; largestIdx = j; }
+      }
+      if (largestSz < minArea) {
+        console.log('Depth flat detection: no significant region (' + largestSz + 'px < min ' + minArea + ')');
+        return null;
+      }
+      var targetLabel = largestIdx + 1;
+      var flatMask = new Uint8Array(n);
+      var fx1 = w, fy1 = h, fx2 = 0, fy2 = 0;
+      for (var i = 0; i < n; i++) {
+        if (labels[i] === targetLabel) {
+          flatMask[i] = 255;
+          var px2 = i % w;
+          var py2 = (i - px2) / w;
+          if (px2 < fx1) fx1 = px2;
+          if (py2 < fy1) fy1 = py2;
+          if (px2 > fx2) fx2 = px2;
+          if (py2 > fy2) fy2 = py2;
+        }
+      }
+      console.log('Depth flat surface: ' + largestSz + 'px, bounds=[' + fx1 + ',' + fy1 + ',' + fx2 + ',' + fy2 + ']');
+      return { mask: flatMask, width: w, height: h, bounds: { x: fx1, y: fy1, w: fx2 - fx1, h: fy2 - fy1 }, area: largestSz };
+    }
+
+    function _detectFlatSurfacesGradient(srcCanvas, alphaMask) {
+      if (!srcCanvas) return null;
+      var w = srcCanvas.width;
+      var h = srcCanvas.height;
+      var ctx = srcCanvas.getContext('2d');
+      var imgData = ctx.getImageData(0, 0, w, h);
+      var px = imgData.data;
+      var n = w * h;
+      var gray = new Float32Array(n);
+      var mask = new Uint8Array(n);
+      for (var i = 0; i < n; i++) {
+        var idx = i * 4;
+        gray[i] = 0.299 * px[idx] + 0.587 * px[idx+1] + 0.114 * px[idx+2];
+        mask[i] = (alphaMask ? alphaMask[i] : px[idx+3]) > 128 ? 1 : 0;
+      }
+      var blurred = new Float32Array(n);
+      var k = [1,2,1,2,4,2,1,2,1];
+      for (var y = 1; y < h-1; y++) {
+        for (var x = 1; x < w-1; x++) {
+          if (!mask[y*w+x]) continue;
+          var sum = 0;
+          for (var ky = -1; ky <= 1; ky++) {
+            for (var kx = -1; kx <= 1; kx++) {
+              sum += gray[(y+ky)*w+(x+kx)] * k[(ky+1)*3+(kx+1)];
+            }
+          }
+          blurred[y*w+x] = sum / 16;
+        }
+      }
+      var grad = new Float32Array(n);
+      for (var y = 1; y < h-1; y++) {
+        for (var x = 1; x < w-1; x++) {
+          if (!mask[y*w+x]) continue;
+          var gx = -blurred[(y-1)*w+x-1] + blurred[(y-1)*w+x+1]
+                   -2*blurred[y*w+x-1] + 2*blurred[y*w+x+1]
+                   -blurred[(y+1)*w+x-1] + blurred[(y+1)*w+x+1];
+          var gy = -blurred[(y-1)*w+x-1] - 2*blurred[(y-1)*w+x] - blurred[(y-1)*w+x+1]
+                   +blurred[(y+1)*w+x-1] + 2*blurred[(y+1)*w+x] + blurred[(y+1)*w+x+1];
+          grad[y*w+x] = Math.sqrt(gx*gx + gy*gy);
+        }
+      }
+      var gradSum = 0, gradCnt = 0;
+      for (var i = 0; i < n; i++) {
+        if (mask[i] && grad[i] > 0) { gradSum += grad[i]; gradCnt++; }
+      }
+      var gradMean = gradCnt > 0 ? gradSum / gradCnt : 10;
+      var thresh = gradMean * 0.35;
+      var binary = new Uint8Array(n);
+      for (var i = 0; i < n; i++) {
+        binary[i] = (mask[i] && grad[i] <= thresh) ? 1 : 0;
+      }
+      var closed = new Uint8Array(binary);
+      var dilated = new Uint8Array(n);
+      for (var y = 1; y < h-1; y++) {
+        for (var x = 1; x < w-1; x++) {
+          var found = false;
+          for (var dy = -1; dy <= 1 && !found; dy++) {
+            for (var dx = -1; dx <= 1 && !found; dx++) {
+              if (closed[(y+dy)*w+(x+dx)]) found = true;
+            }
+          }
+          dilated[y*w+x] = found ? 1 : 0;
+        }
+      }
+      for (var y = 2; y < h-2; y++) {
+        for (var x = 2; x < w-2; x++) {
+          var all = true;
+          for (var dy = -1; dy <= 1 && all; dy++) {
+            for (var dx = -1; dx <= 1 && all; dx++) {
+              if (!dilated[(y+dy)*w+(x+dx)]) all = false;
+            }
+          }
+          binary[y*w+x] = all ? 1 : 0;
+        }
+      }
+      var labels = new Int32Array(n);
+      var labelCnt = 0;
+      var sizes = [];
+      var stk = new Int32Array(n);
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          var i = y*w+x;
+          if (!binary[i] || labels[i]) continue;
+          labelCnt++;
+          var sp = 0;
+          stk[sp++] = i;
+          labels[i] = labelCnt;
+          var sz = 0;
+          while (sp > 0) {
+            var ci = stk[--sp]; sz++;
+            var cx = ci % w;
+            var cy = (ci - cx) / w;
+            if (cx > 0 && binary[ci-1] && !labels[ci-1]) { labels[ci-1] = labelCnt; stk[sp++] = ci-1; }
+            if (cx < w-1 && binary[ci+1] && !labels[ci+1]) { labels[ci+1] = labelCnt; stk[sp++] = ci+1; }
+            if (cy > 0 && binary[ci-w] && !labels[ci-w]) { labels[ci-w] = labelCnt; stk[sp++] = ci-w; }
+            if (cy < h-1 && binary[ci+w] && !labels[ci+w]) { labels[ci+w] = labelCnt; stk[sp++] = ci+w; }
+          }
+          sizes.push(sz);
+        }
+      }
+      var minArea = Math.floor(w * h * 0.015);
+      var largestIdx = -1, largestSz = 0;
+      for (var j = 0; j < sizes.length; j++) {
+        if (sizes[j] > largestSz) { largestSz = sizes[j]; largestIdx = j; }
+      }
+      if (largestSz < minArea) {
+        console.log('Flat surface detection: no significant flat region found (largest=' + largestSz + ', min=' + minArea + ')');
+        return null;
+      }
+      var targetLabel = largestIdx + 1;
+      var flatMask = new Uint8Array(n);
+      var fx1 = w, fy1 = h, fx2 = 0, fy2 = 0;
+      for (var i = 0; i < n; i++) {
+        if (labels[i] === targetLabel) {
+          flatMask[i] = 255;
+          var px2 = i % w;
+          var py2 = (i - px2) / w;
+          if (px2 < fx1) fx1 = px2;
+          if (py2 < fy1) fy1 = py2;
+          if (px2 > fx2) fx2 = px2;
+          if (py2 > fy2) fy2 = py2;
+        }
+      }
+      console.log('Flat surface detected: ' + largestSz + 'px, bounds=[' + fx1 + ',' + fy1 + ',' + fx2 + ',' + fy2 + ']');
+      return { mask: flatMask, width: w, height: h, bounds: { x: fx1, y: fy1, w: fx2-fx1, h: fy2-fy1 }, area: largestSz };
+    }
+
+    async function detectFlatSurfaces(srcCanvas, alphaMask) {
+      if (!srcCanvas) return null;
+      try {
+        var depthResult = await _runDepthInference(srcCanvas);
+        if (depthResult) {
+          var w = srcCanvas.width;
+          var h = srcCanvas.height;
+          var n = w * h;
+          var mask = new Uint8Array(n);
+          if (alphaMask) {
+            for (var i = 0; i < n; i++) mask[i] = alphaMask[i] > 128 ? 1 : 0;
+          } else {
+            var ctx = srcCanvas.getContext('2d');
+            var imgData = ctx.getImageData(0, 0, w, h);
+            var px = imgData.data;
+            for (var i = 0; i < n; i++) mask[i] = px[i * 4 + 3] > 128 ? 1 : 0;
+          }
+          var result = _depthToFlatMask(depthResult, mask, w, h);
+          if (result) {
+            console.log('Flat surface detected via Depth Anything V2');
+            return result;
+          }
+          console.log('Depth model found no flat region, falling back to gradient');
+        }
+      } catch(depthErr) {
+        console.warn('Depth inference failed, falling back to gradient:', depthErr.message);
+      }
+      console.log('Using gradient-based flat surface detection');
+      return _detectFlatSurfacesGradient(srcCanvas, alphaMask);
+    }
+    let aiDrawingsList = [];  // fetched drawings array for current type
+    let aiDrawingsIndex = 0;  // current index in the list
+
+    // ===== Crop Selection Box =====
+    let cropBox = null;      // { x, y, w, h } in image pixels
+    var _cropAutoTimer = null;
+    let cropDragging = false;
+    let cropResizing = false;
+    let cropHandle = null;   // 'nw'|'ne'|'sw'|'se'
+    let cropStart = null;    // { x, y } of drag start
+    const CROP_HANDLE_SIZE = 10;
+
+    function getCropCanvas() { return document.getElementById('cropCanvas'); }
+    function getCropCtx() { return getCropCanvas().getContext('2d'); }
+
+    function showCropOverlay() {
+      const cv = getCropCanvas();
+      cv.style.display = 'block';
+      // Sync size with uploadBox display size
+      resizeCropCanvas();
+      requestAnimationFrame(drawCropOverlay);
+    }
+
+    function hideCropOverlay() {
+      getCropCanvas().style.display = 'none';
+      cropBox = null;
+    }
+
+    function resizeCropCanvas() {
+      const cv = getCropCanvas();
+      const box = document.getElementById('uploadBox');
+      // Set canvas pixel size to match display size
+      const rect = box.getBoundingClientRect();
+      cv.width = rect.width;
+      cv.height = rect.height;
+    }
+
+    function drawCropOverlay() {
+      const cv = getCropCanvas();
+      const ctx = getCropCtx();
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      if (!cropBox) {
+        if (previewImg.src && previewImg.style.display !== 'none') {
+          const imgAspect = previewImg.naturalWidth / previewImg.naturalHeight;
+          const boxAspect = cv.width / cv.height;
+          let dX, dY, dW, dH;
+          if (imgAspect > boxAspect) {
+            dW = cv.width; dH = cv.width / imgAspect;
+          } else {
+            dH = cv.height; dW = cv.height * imgAspect;
+          }
+          dX = (cv.width - dW) / 2;
+          dY = (cv.height - dH) / 2;
+          if (productMaskBounds && previewImg.naturalWidth > 0 && previewImg.naturalHeight > 0) {
+            var mbScaleX = dW / previewImg.naturalWidth;
+            var mbScaleY = dH / previewImg.naturalHeight;
+            var mbCx = productMaskBounds.x + productMaskBounds.w / 2;
+            var mbCy = productMaskBounds.y + productMaskBounds.h / 2;
+            var shrinkFactor = 0.6;
+            var shrinkW = productMaskBounds.w * shrinkFactor;
+            var shrinkH = productMaskBounds.h * shrinkFactor;
+            var cropX = dX + (mbCx - shrinkW / 2) * mbScaleX;
+            var cropY = dY + (mbCy - shrinkH / 2) * mbScaleY;
+            var cropW = shrinkW * mbScaleX;
+            var cropH = shrinkH * mbScaleY;
+            cropX = Math.max(cropX, dX);
+            cropY = Math.max(cropY, dY);
+            if (cropX + cropW > dX + dW) cropW = dX + dW - cropX;
+            if (cropY + cropH > dY + dH) cropH = dY + dH - cropY;
+            cropBox = { x: cropX, y: cropY, w: cropW, h: cropH };
+          } else {
+            cropBox = { x: dX, y: dY, w: dW, h: dH };
+          }
+        }
+      }
+      if (!cropBox) return;
+
+      const { x, y, w, h } = cropBox;
+      // Semi-transparent overlay outside crop
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.clearRect(x, y, w, h);
+
+      // Crop border
+      ctx.strokeStyle = '#28be44';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+
+      // Handles (corner squares)
+      const handles = [
+        { id: 'nw', hx: x, hy: y },
+        { id: 'ne', hx: x + w, hy: y },
+        { id: 'sw', hx: x, hy: y + h },
+        { id: 'se', hx: x + w, hy: y + h },
+      ];
+      ctx.fillStyle = '#28be44';
+      handles.forEach(hd => {
+        ctx.fillRect(hd.hx - CROP_HANDLE_SIZE/2, hd.hy - CROP_HANDLE_SIZE/2, CROP_HANDLE_SIZE, CROP_HANDLE_SIZE);
+      });
+
+      if (_showFlatHighlight && _flatSurfaceMask && _flatSurfaceW > 0 && _flatSurfaceH > 0 && previewImg.naturalWidth > 0) {
+        var flatW = _flatSurfaceW;
+        var flatH = _flatSurfaceH;
+        if (flatW > 0 && flatH > 0) {
+          var natW = previewImg.naturalWidth;
+          var natH = previewImg.naturalHeight;
+          var imgAspect = natW / natH;
+          var boxAspect = cv.width / cv.height;
+          var dW, dH, dX, dY;
+          if (imgAspect > boxAspect) {
+            dW = cv.width; dH = cv.width / imgAspect;
+          } else {
+            dH = cv.height; dW = cv.height * imgAspect;
+          }
+          dX = (cv.width - dW) / 2;
+          dY = (cv.height - dH) / 2;
+          var sx = dW / natW;
+          var sy = dH / natH;
+          var tmpCv = document.createElement('canvas');
+          tmpCv.width = flatW; tmpCv.height = flatH;
+          var tmpCtx = tmpCv.getContext('2d');
+          var tmpImg = tmpCtx.createImageData(flatW, flatH);
+          for (var fi = 0; fi < flatW * flatH; fi++) {
+            if (_flatSurfaceMask[fi]) {
+              var fidx = fi * 4;
+              tmpImg.data[fidx] = 40;
+              tmpImg.data[fidx+1] = 190;
+              tmpImg.data[fidx+2] = 68;
+              tmpImg.data[fidx+3] = 70;
+            }
+          }
+          tmpCtx.putImageData(tmpImg, 0, 0);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x, y, w, h);
+          ctx.clip();
+          ctx.drawImage(tmpCv, dX, dY, dW, dH);
+          ctx.strokeStyle = 'rgba(40, 190, 68, 0.6)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          if (_flatSurfaceBounds) {
+            var fb = _flatSurfaceBounds;
+            var fbSx = dW / _flatSurfaceW;
+            var fbSy = dH / _flatSurfaceH;
+            ctx.strokeRect(dX + fb.x * fbSx, dY + fb.y * fbSy, fb.w * fbSx, fb.h * fbSy);
+          }
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+      }
+    }
+
+    function getCropHandleAt(cx, cy) {
+      if (!cropBox) return null;
+      const { x, y, w, h } = cropBox;
+      const handles = [
+        { id: 'nw', hx: x, hy: y },
+        { id: 'ne', hx: x + w, hy: y },
+        { id: 'sw', hx: x, hy: y + h },
+        { id: 'se', hx: x + w, hy: y + h },
+      ];
+      for (const hd of handles) {
+        if (Math.abs(cx - hd.hx) <= CROP_HANDLE_SIZE && Math.abs(cy - hd.hy) <= CROP_HANDLE_SIZE) {
+          return hd.id;
+        }
+      }
+      return null;
+    }
+
+    function coordInCropBox(cx, cy) {
+      if (!cropBox) return false;
+      return cx >= cropBox.x && cx <= cropBox.x + cropBox.w && cy >= cropBox.y && cy <= cropBox.y + cropBox.h;
+    }
+
+
+    function getCropRect() {
+      // Convert crop box from canvas display coords to image pixel coords
+      const cv = getCropCanvas();
+      const box = document.getElementById('uploadBox');
+      const rect = box.getBoundingClientRect();
+      // Position of image inside box (object-fit: contain)
+      const imgAspect = previewImg.naturalWidth / previewImg.naturalHeight;
+      const boxAspect = rect.width / rect.height;
+      let imgLeft, imgTop, imgW, imgH;
+      if (imgAspect > boxAspect) {
+        imgW = rect.width; imgH = rect.width / imgAspect;
+      } else {
+        imgH = rect.height; imgW = rect.height * imgAspect;
+      }
+      imgLeft = (rect.width - imgW) / 2;
+      imgTop = (rect.height - imgH) / 2;
+      const scaleX = previewImg.naturalWidth / imgW;
+      const scaleY = previewImg.naturalHeight / imgH;
+      const px = Math.max(0, cropBox.x - imgLeft);
+      const py = Math.max(0, cropBox.y - imgTop);
+      const pw = Math.min(cropBox.w, imgW - px);
+      const ph = Math.min(cropBox.h, imgH - py);
+      return {
+        ix: Math.round(px * scaleX),
+        iy: Math.round(py * scaleY),
+        iw: Math.round(pw * scaleX),
+        ih: Math.round(ph * scaleY)
+      };
+    }
+
+    // Crop canvas events
+    getCropCanvas().addEventListener('mousedown', (e) => {
+      if (!previewImg.src || previewImg.style.display === 'none') return;
+      e.preventDefault();
+      clearTimeout(_cropAutoTimer);
+      const cv = getCropCanvas();
+      const rect = cv.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+
+
+      const h = getCropHandleAt(cx, cy);
+      if (h) {
+        cropResizing = true;
+        cropHandle = h;
+      } else if (coordInCropBox(cx, cy)) {
+        cropDragging = true;
+      } else {
+        // Click outside box → start new box
+        cropBox = { x: cx, y: cy, w: 0, h: 0 };
+        cropDragging = true;
+        cropResizing = false;
+      }
+      cropStart = { x: cx, y: cy };
+      requestAnimationFrame(drawCropOverlay);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      const cv = getCropCanvas();
+      if (!cv.style.display || cv.style.display === 'none') return;
+      const rect = cv.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+
+      if (cropResizing && cropBox) {
+        const { x, y, w, h } = cropBox;
+        let nw = cx - x, nh = cy - y;
+        if (cropHandle === 'sw') { cropBox.x = cx; nw = (x + w) - cx; }
+        else if (cropHandle === 'ne') { cropBox.y = cy; nh = (y + h) - cy; }
+        else if (cropHandle === 'nw') { cropBox.x = cx; cropBox.y = cy; nw = (x + w) - cx; nh = (y + h) - cy; }
+        cropBox.w = nw; cropBox.h = nh;
+        clampCropBox();
+        requestAnimationFrame(drawCropOverlay);
+      } else if (cropDragging && cropBox && cropStart) {
+        if (cropBox.w === 0 && cropBox.h === 0) {
+          cropBox.w = cx - cropStart.x;
+          cropBox.h = cy - cropStart.y;
+        } else {
+          cropBox.x += cx - cropStart.x;
+          cropBox.y += cy - cropStart.y;
+          clampCropBox();
+        }
+        cropStart = { x: cx, y: cy };
+        requestAnimationFrame(drawCropOverlay);
+      } else {
+        // Update cursor
+        cv.style.cursor = getCropHandleAt(cx, cy) ? 'nwse-resize' : coordInCropBox(cx, cy) ? 'move' : 'crosshair';
+      }
+    });
+
+
+    function clampCropBox() {
+      const cv = getCropCanvas();
+      const box = document.getElementById('uploadBox');
+      const rect = box.getBoundingClientRect();
+      const imgAspect = previewImg.naturalWidth / previewImg.naturalHeight;
+      const boxAspect = rect.width / rect.height;
+      let imgLeft, imgTop, imgW, imgH;
+      if (imgAspect > boxAspect) { imgW = rect.width; imgH = rect.width / imgAspect; }
+      else { imgH = rect.height; imgW = rect.height * imgAspect; }
+      imgLeft = (rect.width - imgW) / 2;
+      imgTop = (rect.height - imgH) / 2;
+      var clampLeft = imgLeft, clampTop = imgTop, clampRight = imgLeft + imgW, clampBottom = imgTop + imgH;
+      if (productMaskBounds && previewImg.naturalWidth > 0 && previewImg.naturalHeight > 0) {
+        var mbScaleX = imgW / previewImg.naturalWidth;
+        var mbScaleY = imgH / previewImg.naturalHeight;
+        clampLeft = imgLeft + productMaskBounds.x * mbScaleX;
+        clampTop = imgTop + productMaskBounds.y * mbScaleY;
+        clampRight = clampLeft + productMaskBounds.w * mbScaleX;
+        clampBottom = clampTop + productMaskBounds.h * mbScaleY;
+      }
+      if (cropBox.x < clampLeft) cropBox.x = clampLeft;
+      if (cropBox.y < clampTop) cropBox.y = clampTop;
+      if (cropBox.x + cropBox.w > clampRight) { cropBox.w = clampRight - cropBox.x; if (cropBox.w < 0) cropBox.w = 0; }
+      if (cropBox.y + cropBox.h > clampBottom) { cropBox.h = clampBottom - cropBox.y; if (cropBox.h < 0) cropBox.h = 0; }
+      if (cropBox.w < 0) cropBox.w = 0;
+      if (cropBox.h < 0) cropBox.h = 0;
+    }
+
+    document.addEventListener('mouseup', () => {
+      const wasInteracting = cropDragging || cropResizing;
+      cropDragging = false;
+      cropResizing = false;
+      cropHandle = null;
+      if (!cropBox) return;
+      if (cropBox.w < 0) { cropBox.x += cropBox.w; cropBox.w = -cropBox.w; }
+      if (cropBox.h < 0) { cropBox.y += cropBox.h; cropBox.h = -cropBox.h; }
+      clampCropBox();
+      if (wasInteracting && cropBox.w > 10 && cropBox.h > 10) {
+        clearTimeout(_cropAutoTimer);
+        _cropAutoTimer = setTimeout(function() {
+          if (previewImg.src && previewImg.style.display !== 'none' && recognizedMaterial && effectTypeSelected && currentDrawing) {
+            generatePreview();
+          }
+        }, 500);
+      }
+    });
+
+    previewImg.addEventListener('load', () => {
+      if (previewImg.style.visibility === 'hidden') return;
+      resizeCropCanvas();
+      cropBox = null;
+      showCropOverlay();
+    });
+
+    // Resize crop canvas on window resize
+    window.addEventListener('resize', () => {
+      if (getCropCanvas().style.display !== 'none') {
+        resizeCropCanvas();
+        requestAnimationFrame(drawCropOverlay);
+      }
+    });
+
+    // ===== Machine Profiles (loaded from DB) =====
+    let MACHINE_PROFILES = {};
+
+    async function initMachineSelect() {
+      try {
+        const res = await __fetchApi('/api/public/machines');
+        const data = await res.json();
+        const machines = data.items || [];
+        MACHINE_PROFILES = {};
+        machines.forEach(m => {
+          MACHINE_PROFILES[m.value] = {
+            label: m.label || m.value,
+            supportedTypes: Array.isArray(m.supportedTypes) ? m.supportedTypes : [],
+          };
+        });
+      } catch (e) {
+        // Fallback defaults
+        MACHINE_PROFILES = {
+          'F2U UV': { label: 'xTool F2 Ultra UV', supportedTypes: ['vector', 'jarvis', 'depth'] },
+          'xTool M2': { label: 'xTool M2', supportedTypes: ['vector', 'jarvis'] },
+        };
+      }
+      const select = document.getElementById('machineSelect');
+      select.innerHTML = Object.entries(MACHINE_PROFILES).map(([id, m]) =>
+        `<option value="${id}">${m.label}</option>`
+      ).join('');
+      if (MACHINE_PROFILES['F2U UV']) {
+        select.value = 'F2U UV';
+      }
+    }
+
+    initMachineSelect().then(function() {
+      var defaultMachine = document.getElementById('machineSelect').value;
+      if (defaultMachine) {
+        loadMaterialsByMachine(defaultMachine);
+        onFrontendMachineChange();
+      }
+    });
+
+    const VECTOR_PARAMS = {
+      items: [
+        { label: '功率', unit: '%', min: 1, max: 100, recommended: 70 },
+        { label: '速度', unit: 'mm/s', min: 2, max: 15000, recommended: 50 },
+        { label: '次数', unit: '', min: 1, max: 1000, recommended: 3 },
+        { label: '密度', unit: '', min: 1, max: 800, recommended: 60 },
+        { label: '频率', unit: 'kHz', min: 40, max: 150, recommended: 40 },
+      ]
+    };
+
+    const DEPTH_PARAMS = {
+      items: [
+        { label: '功率', unit: '%', min: 1, max: 100, recommended: 70 },
+        { label: '速度', unit: 'mm/s', min: 2, max: 15000, recommended: 50 },
+        { label: '次数', unit: '', min: 1, max: 1000, recommended: 3 },
+        { label: '密度', unit: '', min: 1, max: 800, recommended: 60 },
+        { label: '频率', unit: 'kHz', min: 40, max: 150, recommended: 40 },
+      ]
+    };
+
+    const BITMAP_PARAMS = {
+      items: [
+        { label: '功率', unit: '%', min: 1, max: 100, recommended: 70 },
+        { label: '打点时间', unit: 'us', min: 150, max: 3000, recommended: 50 },
+        { label: '次数', unit: '', min: 1, max: 1000, recommended: 3 },
+        { label: 'DPI', unit: '', min: 1, max: 2000, recommended: 300 },
+        { label: '频率', unit: 'kHz', min: 40, max: 150, recommended: 40 },
+      ]
+    };
+    const M2_BITMAP_PARAMS = {
+      items: [
+        { label: '功率', unit: '%', min: 1, max: 100, recommended: 70 },
+        { label: '速度', unit: 'mm/s', min: 1, max: 4000, recommended: 2000 },
+        { label: '次数', unit: '', min: 1, max: 1000, recommended: 3 },
+        { label: '密度', unit: '', min: 1, max: 2000, recommended: 300 },
+        { label: '频率', unit: 'kHz', min: 40, max: 150, recommended: 40 },
+      ]
+    };
+    function getBitmapParams() {
+      const machine = document.getElementById('machineSelect').value;
+      return machine === 'xTool M2' ? M2_BITMAP_PARAMS.items : BITMAP_PARAMS.items;
+    }
+    function getCurrentParams() {
+      if (currentType === 'depth') {
+        return DEPTH_PARAMS.items;
+      }
+      if (currentType === 'vector') {
+        return VECTOR_PARAMS.items;
+      }
+      return getBitmapParams();
+    }
+
+    function getRecommendedParams() {
+      if (currentType === 'depth') {
+        return DEPTH_PARAMS.items;
+      }
+      if (currentType === 'vector') {
+        return VECTOR_PARAMS.items;
+      }
+      return getBitmapParams();
+    }
+
+    function renderRecommendedParams(zero = false) {
+      const params = getRecommendedParams();
+      paramList.innerHTML = params.map(p => {
+        if (zero) {
+          return `<div class="param-item"><span class="param-name">${p.label}${p.unit ? ' ' + p.unit : ''}</span><span class="param-val">0${p.unit === '%' ? '%' : ''}</span></div>`;
+        }
+        // Special case: 图像模式 shows 'jarvis' instead of number
+        if (p.label === '图像模式') {
+          return `<div class="param-item"><span class="param-name">图像模式</span><span class="param-val">jarvis</span></div>`;
+        }
+        return `<div class="param-item"><span class="param-name">${p.label}${p.unit ? ' ' + p.unit : ''}</span><span class="param-val">${p.recommended}${p.unit === '%' ? '%' : ''}</span></div>`;
+      }).join('');
+    }
+
+    let effectTypeSelected = false;
+
+    // Initial state: no drawing type selected, show empty param list
+    paramList.innerHTML = '';
+
+    function handleDrawingTypeClick(card, drawingType) {
+      const typeChanged = currentType !== drawingType;
+      currentType = drawingType;
+
+      [typeVector, typeJarvis, typeDepth].forEach(c => {
+        c.classList.remove('selected');
+        c.querySelector('.check').textContent = '';
+      });
+
+      const col1Map = { vector: typeVector, jarvis: typeJarvis, depth: typeDepth };
+      const c1 = col1Map[drawingType];
+      c1.classList.add('selected');
+      c1.querySelector('.check').textContent = '✓';
+
+      const labels = { vector: '矢量图（Vector）', jarvis: 'Jarvis位图（Jarvis Bitmap）', depth: '浮雕深度图（Relief Depth Map）' };
+      aiDrawingValue.textContent = labels[drawingType];
+
+      // Update dropdown button text and active state
+      const ddBtn = document.getElementById('btnAiDrawingTitle');
+      if (ddBtn) {
+        const shortLabels = { vector: '矢量图', jarvis: 'Jarvis位图', depth: '浮雕深度图' };
+        ddBtn.textContent = shortLabels[drawingType] + ' ▾';
+      }
+      document.querySelectorAll('#drawingTypeDropdown .dropdown-item').forEach(el => el.classList.remove('active'));
+      const ddMap = { vector: 'ddVector', jarvis: 'ddJarvis', depth: 'ddDepth' };
+      const ddActive = document.getElementById(ddMap[drawingType]);
+      if (ddActive) ddActive.classList.add('active');
+
+      // Only reset drawing when switching to a different type
+      if (typeChanged) {
+        currentDrawing = null;
+        drawingSource = null;
+        aiDrawingsList = [];
+        aiDrawingsIndex = 0;
+        updateDrawingUI();
+        const aiDrawingBox = document.getElementById('aiDrawingBox');
+        aiDrawingBox.innerHTML = '<span class="panel-placeholder">点击「推荐图纸」加载图纸或上传自己的图纸</span>';
+        effectTypeSelected = false;
+        [btnRefParams, btnShallow, btnDeep].forEach(b => b.classList.remove('active'));
+        paramList.innerHTML = '';
+        // Reload materials for new drawing type, preserve selection if still available
+        var prevMaterial = recognizedMaterial;
+        var currentMachine = document.getElementById('machineSelect').value;
+        loadMaterialsByMachine(currentMachine, drawingType, function() {
+          if (prevMaterial && materialOptions.some(function(m) { return m.value === prevMaterial; })) {
+            var found = materialOptions.find(function(m) { return m.value === prevMaterial; });
+            selectMaterial(prevMaterial, found ? found.label : prevMaterial);
+          } else if (_aiRecognizedText) {
+            recognizedMaterial = null;
+            syncMaterialDropdown('');
+            _pendingAiRawText = _aiRecognizedText;
+            autoSelectMaterialByKeywords(_pendingAiRawText);
+            _pendingAiRawText = '';
+          } else {
+            recognizedMaterial = null;
+            document.getElementById('materialValue').textContent = '—';
+            syncMaterialDropdown('');
+          }
+        });
+        document.getElementById('sectionMaterial').style.display = '';
+      }
+      effectTypeOptions.style.display = 'grid';
+      updateParamSectionsVisibility();
+    }
+
+    typeVector.addEventListener('click', () => handleDrawingTypeClick(typeVector, 'vector'));
+    typeJarvis.addEventListener('click', () => handleDrawingTypeClick(typeJarvis, 'jarvis'));
+    typeDepth.addEventListener('click', () => handleDrawingTypeClick(typeDepth, 'depth'));
+
+    // ===== Drawing Type Dropdown =====
+    const drawingTypeDropdown = document.getElementById('drawingTypeDropdown');
+
+    function toggleDrawingTypeDropdown() {
+      if (drawingTypeDropdown.classList.contains('open')) {
+        drawingTypeDropdown.classList.remove('open');
+        return;
+      }
+      // Sync depth visibility with machine before opening
+      var currentMachine = document.getElementById('machineSelect').value;
+      var profile = MACHINE_PROFILES[currentMachine];
+      var ddDepth = document.getElementById('ddDepth');
+      ddDepth.style.display = profile && profile.supportedTypes.includes('depth') ? '' : 'none';
+      drawingTypeDropdown.classList.add('open');
+    }
+
+    // Dropdown item click handlers
+    document.getElementById('ddVector').addEventListener('click', function() {
+      handleDrawingTypeClick(typeVector, 'vector');
+      drawingTypeDropdown.classList.remove('open');
+      loadAIDrawing();
+    });
+    document.getElementById('ddJarvis').addEventListener('click', function() {
+      handleDrawingTypeClick(typeJarvis, 'jarvis');
+      drawingTypeDropdown.classList.remove('open');
+      loadAIDrawing();
+    });
+    document.getElementById('ddDepth').addEventListener('click', function() {
+      handleDrawingTypeClick(typeDepth, 'depth');
+      drawingTypeDropdown.classList.remove('open');
+      loadAIDrawing();
+    });
+
+    // Close dropdown on outside click
+    document.addEventListener('click', function(e) {
+      if (!drawingTypeDropdown.classList.contains('open')) return;
+      var btn = document.getElementById('btnAiDrawingTitle');
+      if (!btn.contains(e.target) && !drawingTypeDropdown.contains(e.target)) {
+        drawingTypeDropdown.classList.remove('open');
+      }
+    });
+
+    // ===== Lightbox DOM (must exist before getElementById below) =====
+    document.body.insertAdjacentHTML('beforeend', `<div id="lightbox"><div class="lightbox-close" id="lightboxClose">✕</div><img id="lightboxImg" src="" alt=""></div>`);
+
+    // ===== Lightbox =====
+    const lightbox = document.getElementById('lightbox');
+    const lightboxImg = document.getElementById('lightboxImg');
+    const lightboxClose = document.getElementById('lightboxClose');
+
+    function openLightbox(src) {
+      lightboxImg.src = src;
+      lightbox.classList.add('show');
+    }
+
+    function closeLightbox() {
+      lightbox.classList.remove('show');
+      lightboxImg.src = '';
+    }
+
+    lightbox.addEventListener('click', closeLightbox);
+    lightboxClose.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeLightbox();
+    });
+
+    // Double-click to zoom on AI drawing type cards
+    [typeVector, typeJarvis].forEach(el => {
+      el.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        const img = el.querySelector('img');
+        if (img && img.src && img.style.display !== 'none') {
+          openLightbox(img.src);
+        }
+      });
+    });
+
+    previewImg.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      if (previewImg.src && previewImg.src.length > 0 && previewImg.style.display !== 'none') {
+        openLightbox(previewImg.src);
+      }
+    });
+
+    // ===== Ad Popup + Model Loading =====
+    var AD_POPUP_KEY = 'xtool_preview_ad_shown';
+    var adPopupOverlay = document.getElementById('adPopupOverlay');
+    var adPopupCloseBtn = document.getElementById('adPopupCloseBtn');
+    var adPopupLoading = document.getElementById('adPopupLoading');
+    var adPopupStatus = document.getElementById('adPopupStatus');
+    var adPopupProgressBar = document.getElementById('adPopupProgressBar');
+    var _modelLoaded = false;
+
+    function shouldShowAdPopup() {
+      try {
+        return localStorage.getItem(AD_POPUP_KEY) !== 'true';
+      } catch(e) { return false; }
+    }
+
+    function updateAdPopupProgress(percent) {
+      if (adPopupProgressBar) {
+        adPopupProgressBar.style.width = percent + '%';
+      }
+    }
+
+    function onModelLoadComplete() {
+      _modelLoaded = true;
+      if (adPopupOverlay.classList.contains('active')) {
+        adPopupLoading.innerHTML = '<span style="color:#28be44;font-size:16px;">✓ 模型加载完成</span>';
+        updateAdPopupProgress(100);
+        adPopupCloseBtn.disabled = false;
+        adPopupCloseBtn.textContent = '开始使用';
+      }
+    }
+
+    adPopupCloseBtn.addEventListener('click', function() {
+      if (!_modelLoaded) return;
+      adPopupOverlay.classList.remove('active');
+      try { localStorage.setItem(AD_POPUP_KEY, 'true'); } catch(e) {}
+    });
+
+    (function initAdPopup() {
+      if (shouldShowAdPopup()) {
+        _modelLoaded = true;
+        adPopupOverlay.classList.add('active');
+        updateAdPopupProgress(100);
+        adPopupStatus.textContent = '准备就绪';
+        onModelLoadComplete();
+      }
+      if (!_materialPopupShownOnInit) {
+        _materialPopupShownOnInit = true;
+        setTimeout(function() { showNoMaterialPopup(false); }, 500);
+      }
+    })();
+
+    // ===== Load static images via __fetchImg (blob iframe cannot load API URLs directly) =====
+    (function initStaticImages() {
+      if (window.__fetchImg) {
+        window.__fetchImg('/api/laser-preview/asset/machine-bg.png').then(function(url) {
+          var bg = document.getElementById('col3Bg');
+          if (bg) bg.style.backgroundImage = 'url(' + url + ')';
+        }).catch(function() {});
+        window.__fetchImg('/api/laser-preview/asset/xTool_Logo_Color_White.png').then(function(url) {
+          var img = document.getElementById('col1LogoImg');
+          if (img) img.src = url;
+        }).catch(function() {});
+      }
+    })();
+  </script>
+
+
+
+</body></html>
